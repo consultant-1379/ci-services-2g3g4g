@@ -1,0 +1,76 @@
+##=============================================================================
+##
+## QOS summary query
+## -----------------------------------
+##
+## List summary data for each QCI (Quality Class Indicator)
+##
+## Parameters:
+##	AGGREGATION_TABLES	aggregation tables to use in query, see the TechPackTables Javadoc for more dteails
+##  rawtables			raw tables to use in query, see the TechPackTables Javadoc for more dteails
+## 	COLUMNS_TO_FILTER_ON
+##	columnsForQuery
+##	type				
+##	COLUMNS_TO_SELECT_FROM_RAW_TABLES_FOR_QOS_ERR_SUMMARY
+##  COLUMNS_TO_SELECT_FROM_RAW_TABLES_FOR_QOS_SUC_SUMMARY
+##  useAggregationTables boolean indicating whether query should use raw or aggregation tables
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+begin
+
+declare local temporary table qci_summary
+(  
+	qci_id smallint NULL,
+    qci_description varchar(128) NULL,
+    no_of_errors int NULL,    
+    no_of_successes int NULL,
+	impacted_subscribers int NULL
+	
+);
+
+#foreach($i in [1..10])
+insert into qci_summary (
+select 
+	$i,
+	QCI_ID_DESCRIPTION as QCI_ID_DESCRIPTION, 
+	isnull(FAILURES, 0) as FAILURES,
+	isnull(SUCCESSES, 0) as SUCCESSES, 
+	isnull(IMPACTED_SUBSCRIBERS,0) as IMPACTED_SUBSCRIBERS
+from 
+	(select
+		sum(QCI_ERR_$i) as FAILURES,
+		count(distinct(IMSI)) 
+	from
+		$rawtables.getErrTables()
+	where
+		#GET_COLUMNS_WHERE($COLUMNS_TO_FILTER_ON)
+		and QCI_ERR_$i <> 0
+		and #GET_DATETIME_RANGE()
+		) as err(FAILURES, IMPACTED_SUBSCRIBERS),
+	(select
+		sum(QCI_SUC_$i) as SUCCESSES
+	from	
+		$AGGREGATION_TABLES.getSucTables()
+	where		
+		#GET_DATETIME_RANGE()
+		and #GET_COLUMNS_WHERE($columnsForQuery)
+		) as suc(SUCCESSES),	
+	(select 
+		QCI_ID_DESCRIPTION
+	from
+		DIM_E_LTE_QCI
+	where QCI_NUMBER=$i ) as qci_description
+	);
+#end
+
+SELECT
+	QCI_ID,
+	QCI_DESCRIPTION, 
+	NO_OF_ERRORS,
+	NO_OF_SUCCESSES, 
+	IMPACTED_SUBSCRIBERS
+FROM qci_summary;
+
+drop table qci_summary;
+end

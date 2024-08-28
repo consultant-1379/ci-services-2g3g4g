@@ -1,0 +1,127 @@
+##=============================================================================
+##
+## Network analysis : Group Event summary
+##
+## Description:
+##
+##    event volumns for the group node
+##
+##
+## Author: ehaoswa 22/09/2010
+##
+## Changes:
+##		eavidat 19/04/11 : 4G support	
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+
+#SET_GROUP_TYPE($type)
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+
+begin
+
+#macro (EVENT_VOLUME_QUERY_FOR_GROUP $errTablesToUseInQuery $sucTablesToUseInQuery)
+	#EVENT_VOLUME_SELECT($type)
+	from
+    (select 
+        tmp_st,
+        $groupnameColumn, 
+        EVENT_ID, 
+        count(*)
+    from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInQuery "temp_err" $columnsToIncludeInRAWView)
+        ,#GET_CHART_TIMES($starttime $endtime $interval)
+		,$groupTable temp_group 
+    where        
+        temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		and #GET_JOIN("temp_err" "temp_group" $joinKeys)
+        and DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et
+    group by
+        tmp_st,
+        $groupnameColumn,
+        EVENT_ID
+    )as err (
+        TS,
+        $groupnameColumn,   
+        EVENT_ID, 
+        NO_OF_ERRORS)
+    full outer join
+    (select 
+        tmp_st,
+        $groupnameColumn,   
+        EVENT_ID,
+        sum(NO_OF_SUCCESSES)
+    from 
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($sucTablesToUseInQuery "temp_suc" $columnsToIncludeInAggViewSuc)
+        ,#GET_CHART_TIMES($starttime $endtime $interval)
+		,$groupTable temp_group
+    where
+        temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		and #GET_JOIN("temp_suc" "temp_group" $joinKeys)
+        and DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et
+    group by
+        tmp_st,
+        $groupnameColumn,
+        EVENT_ID
+    ) as suc(
+        TS, 
+        $groupnameColumn, 
+        EVENT_ID, 
+        NO_OF_SUCCESSES)
+    on(
+        #GET_JOIN("suc" "err" ["TS", "EVENT_ID"])
+        and #GET_JOIN("err" "suc" [$groupnameColumn])
+    )
+    full outer join
+    (select
+        tmp_st,   
+        $groupnameColumn,
+        count(distinct(IMSI))
+    from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInIMSICount "temp_sub" $columnsToIncludeInIMSICount)
+		,#GET_CHART_TIMES($starttime $endtime $interval)
+		,$groupTable temp_group
+    where    
+        temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		and #GET_JOIN("temp_sub" "temp_group" $joinKeys)
+        and DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et
+    group by
+        tmp_st,
+        $groupnameColumn   
+    ) as sub(
+        TS,
+        $groupnameColumn,           
+        NO_OF_TOTAL_ERR_SUBSCRIBERS)
+    on(
+        #GET_MULTI_JOIN(["suc","err"] "sub" ["TS"])
+        and #GET_MULTI_JOIN(["err","suc"] "sub" [$groupnameColumn])        
+    )    
+    left outer join
+	  (	select EVENT_ID from dc.DIM_E_SGEH_EVENTTYPE
+			union all
+		select EVENT_ID from dc.DIM_E_LTE_EVENTTYPE
+		)etref
+    on(
+        etref.EVENT_ID = isnull(suc.EVENT_ID, err.EVENT_ID)
+    )
+	group by
+		TS
+#end
+
+select 
+	*
+from (
+	#if($techPackTables.getErrTables().size() > 0  && $sucAggTables.size() > 0)
+		#EVENT_VOLUME_QUERY_FOR_GROUP($techPackTables.getErrTables() $sucAggTables)
+	#end 
+) EVENT_VOLUME_RESULT 
+order by
+	TS
+end

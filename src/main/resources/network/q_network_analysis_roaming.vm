@@ -1,0 +1,179 @@
+##=============================================================================
+##
+## Network analysis : Roaming information
+##  
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##  
+##     TR_1 : query against raw events   
+##     TR_2 : query against 1min agg
+##     TR_3 : query against 15min agg
+##     TR_4 : query against daily agg
+##
+## roamingobject : one of {MCC, MCC_MNC} 
+##
+## Description: 
+## 
+##     Get the roaming statistics for each roaming country or roaming operator
+##     And we want to include all the TACs for the roaming statistics
+##
+## NOTE:
+##
+##     We only have overall aggregation for roaming statistics, i.e, roaming statistics are not separated into SUC/ERR tables      
+## 
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($RAW_TABLES = $techPackTables.getRawTables())
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+#set($columnsToIncludeInNewView=["IMSI", "IMSI_MCC"])
+#set($columns=["IMSI_MCC"])
+#set($refcolumns=["MCC"])
+#elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+#set($columnsToIncludeInNewView=["IMSI", "IMSI_MCC", "IMSI_MNC"])
+#set($columns=["IMSI_MCC", "IMSI_MNC"])
+#set($refcolumns=["MCC", "MNC"])
+#end
+
+
+#if ( ${timerange}==$ApplicationConstants.FIFTEEN_MINUTES || ${timerange} == $ApplicationConstants.DAY)
+select    
+	top 25 
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    COUNTRY
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    OPERATOR
+    #end,
+    sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    sum(isnull(NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+    max(isnull(roamers.NO_OF_TOTAL_ROAMERS, 0)) as NO_OF_TOTAL_ROAMERS,
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    agg.IMSI_MCC
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    agg.IMSI_MCC,
+    agg.IMSI_MNC
+    #end
+from
+    (select
+        #GET_COLUMNS($columns)
+        NO_OF_ERRORS,
+        NO_OF_SUCCESSES
+    from
+        dc.EVENT_E_SGEH_MCC_MNC_ROAM$time
+    where
+        #GET_DATETIME_RANGE()
+    union all
+	select
+        #GET_COLUMNS($columns)
+        NO_OF_ERRORS,
+        NO_OF_SUCCESSES
+    from
+        dc.EVENT_E_LTE_MCC_MNC_ROAM$time
+    where
+        #GET_DATETIME_RANGE()
+    )	as agg,
+    (select
+        #GET_COLUMNS($columns)        
+        count(distinct(IMSI))
+     from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_AND_ROAMING($RAW_ERR_TABLES "temp_all_tables" $columnsToIncludeInNewView)
+    group by
+        #GET_COLUMNS_NO_COMMA_TRAILING($columns)            
+    )as roamers (
+        #GET_COLUMNS($columns)        
+        NO_OF_TOTAL_ROAMERS
+    ),
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    (select distinct MCC,COUNTRY from DIM_E_SGEH_MCCMNC) as   mccmnc
+     #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    (select distinct MCC,MNC,OPERATOR   from DIM_E_SGEH_MCCMNC) as  mccmnc(MCC,MNC,OPERATOR)
+    #end
+where
+    #GET_JOIN('agg' 'roamers' $columns)
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    and agg.IMSI_MCC*=mccmnc.MCC
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    and agg.IMSI_MCC*=mccmnc.MCC
+    and agg.IMSI_MNC*=mccmnc.MNC
+    #end
+group by
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    COUNTRY,agg.IMSI_MCC
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    OPERATOR ,agg.IMSI_MCC ,agg.IMSI_MNC
+    #end
+order by NO_OF_ERRORS desc;
+	
+#else
+select
+	top 25
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    COUNTRY
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    OPERATOR
+    #end,
+    sum(isnull(err.NO_OF_ERRORS,0)) as NO_OF_ERRORS,
+    sum(isnull(suc.NO_OF_SUCCESSES, 0)) as NO_OF_SUCCESSES,
+    sum(isnull(err.NO_OF_TOTAL_ROAMERS, 0)) as NO_OF_TOTAL_ROAMERS,
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    isnull(suc.IMSI_MCC, err.IMSI_MCC)
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    isnull(suc.IMSI_MCC, err.IMSI_MCC) ,
+    isnull(suc.IMSI_MNC, err.IMSI_MNC)
+    #end
+from
+    (select
+        #GET_COLUMNS($columns)
+        count(*),
+        count(distinct(IMSI))
+    from
+        #REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_AND_ROAMING($RAW_ERR_TABLES "temp_err" $columnsToIncludeInNewView)
+    group by
+        #GET_COLUMNS_NO_COMMA_TRAILING($columns)
+    ) as err (
+        #GET_COLUMNS($columns)
+        NO_OF_ERRORS,
+        NO_OF_TOTAL_ROAMERS
+    )
+    full outer join
+    (select
+        #GET_COLUMNS($columns)        
+        count(*)
+     from
+	 	#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_AND_ROAMING($RAW_SUC_TABLES "temp_suc" $columnsToIncludeInNewView)	 
+    group by
+        #GET_COLUMNS_NO_COMMA_TRAILING($columns)
+    ) as suc (
+        #GET_COLUMNS($columns)          
+        NO_OF_SUCCESSES
+    )
+    on(
+        #GET_JOIN('suc' 'err' $columns)
+    )
+    left outer join
+        #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+        (select distinct MCC,COUNTRY from DIM_E_SGEH_MCCMNC) as   mccmnc
+        #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+        (select distinct MCC,MNC,OPERATOR   from DIM_E_SGEH_MCCMNC ) as  mccmnc(MCC,MNC,OPERATOR)
+        #end
+    on(
+        #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+        isnull(suc.IMSI_MCC, err.IMSI_MCC) = mccmnc.MCC
+        #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+        isnull(suc.IMSI_MCC, err.IMSI_MCC) = mccmnc.MCC
+        and isnull(suc.IMSI_MNC, err.IMSI_MNC) = mccmnc.MNC
+        #end
+    )
+group by
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+    COUNTRY,
+    isnull(suc.IMSI_MCC, err.IMSI_MCC)
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+    OPERATOR,
+    isnull(suc.IMSI_MCC, err.IMSI_MCC),
+    isnull(suc.IMSI_MNC, err.IMSI_MNC)
+    #end
+order by NO_OF_ERRORS desc  ;
+
+#end

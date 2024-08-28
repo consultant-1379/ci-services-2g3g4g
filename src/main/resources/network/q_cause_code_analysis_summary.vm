@@ -1,0 +1,252 @@
+##=============================================================================
+##
+## Network Analysis : cause code failure analysis
+## 
+## type : one of {APN, BSC, CELL, SGSN}
+##  
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##  
+##     TR_1 : normally query against raw events   
+##     TR_2 : normally query against 1min agg
+##     TR_3 : normally query against 15min agg
+##     TR_4 : normally query against daily agg
+##   
+## @TODO - refactoring required here - template to split into two new templates, one that queries the raw tables
+## and one that queries the aggregation tables.  TechPackTables object should be used to to populate the tables and views, 
+## and all business logic to be moved up into the java layer
+##=============================================================================
+
+##-----------------------------------------------------------------------------
+## define references
+##
+##-----------------------------------------------------------------------------
+
+#DEFINE_CONSTANTS()
+
+#if(${type}==$TYPE_SGSN)
+    #set($columns=[$SGSN])
+#elseif(${type}==$TYPE_BSC)
+    #set($columns=[$RAT,$VENDOR,$BSC])
+#elseif(${type}==$TYPE_CELL)
+    #set($columns=[$RAT,$VENDOR,$BSC,$CELL])
+#elseif(${type}==$TYPE_APN)
+    #set($columns=[$APN])
+#end
+
+## $time must be set prior to aggregate logic as might be rest by #RAW_VIEW()
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+
+#set($errTables=$techPackTables.getErrTables())
+#set($subscriberCountCols=[$CAUSE_CODE,$SUBCAUSE_CODE,$IMSI])
+#set($cptRefForSgeh="dc.DIM_E_SGEH_CAUSE_PROT_TYPE")
+#set($cptRefForLte="dc.DIM_E_LTE_CAUSE_PROT_TYPE")
+#set($ccRefForSgeh="dc.DIM_E_SGEH_CAUSECODE")
+#set($ccRefForLte="dc.DIM_E_LTE_CAUSECODE")
+#set($sccRefForSgeh="dc.DIM_E_SGEH_SUBCAUSECODE")
+#set($sccRefForLte="dc.DIM_E_LTE_SUBCAUSECODE")
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+##-----------------------------------------------------------------------------
+## template body
+##
+##-----------------------------------------------------------------------------
+
+#macro(CCAS_SINGLE_AGG_SUB_QUERY $columnsToInclude $tableToUseInQuery)	
+	#foreach ($table in $tableToUseInQuery)		
+		#if ( $velocityCount > 1)
+			union all
+		#end
+		select
+			#GET_COLUMNS($columnsToInclude)
+			#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+		from 
+			dc.$table
+		where
+		#GET_DATETIME_RANGE()
+	#end
+#end
+
+#macro(CCAS_SINGLE_AGG_QUERY $errTable $cptTable $ccTable $sccTable $isLte)
+(select #GET_COLUMNS($columns) errAdvice.CAUSE_PROT_TYPE, errAdvice.CAUSE_PROT_TYPE_DESC, errAdvice.CAUSE_CODE, errAdvice.CAUSE_CODE_DESC, errAdvice.SUBCAUSE_CODE, errAdvice.SUBCAUSE_CODE_DESC,
+errAdvice.NO_OF_ERRORS, errAdvice.SUBCAUSE_CODE_HELP as ADVICE from(
+select	#GET_COLUMNS($columns) cptref.CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, CAUSE_CODE_DESC, sccref.SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS
+	from	
+		dc.${errTable} errRef,
+		$ccTable ccref,
+		$sccTable sccref,
+		$cptTable cptref
+	where
+		#GET_DATETIME_RANGE()
+		and #GET_COLUMNS_WHERE_BY_TABLE("errRef" $columns)
+		and cptref.CAUSE_PROT_TYPE = errRef.CAUSE_PROT_TYPE
+		and ccref.CAUSE_CODE = errRef.CAUSE_CODE
+		and sccref.SUBCAUSE_CODE = errRef.SUBCAUSE_CODE
+        and ccref.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+	group by
+		ccref.CAUSE_CODE,
+        CAUSE_CODE_DESC,
+        sccref.SUBCAUSE_CODE,
+        SUBCAUSE_CODE_DESC,
+        SUBCAUSE_CODE_HELP,
+        cptref.CAUSE_PROT_TYPE,
+        CAUSE_PROT_TYPE_DESC,
+        #GET_COLUMNS_NO_COMMA_TRAILING($columns)
+		)
+		as errAdvice(#GET_COLUMNS($columns) CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, NO_OF_ERRORS)
+	)
+#end
+
+#macro(CCAS_NONAGG_QUERY $errTable $cptTable $ccTable $sccTable $isLte)
+(select #GET_COLUMNS($columns) errAdvice.CAUSE_PROT_TYPE, errAdvice.CAUSE_PROT_TYPE_DESC, errAdvice.CAUSE_CODE, errAdvice.CAUSE_CODE_DESC, errAdvice.SUBCAUSE_CODE, errAdvice.SUBCAUSE_CODE_DESC,
+errAdvice.NO_OF_ERRORS, errAdvice.NO_OF_TOTAL_ERR_SUBSCRIBERS, errAdvice.SUBCAUSE_CODE_HELP as ADVICE from (
+select	#GET_COLUMNS($columns) cptref.CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, CAUSE_CODE_DESC, 
+	     sccref.SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, count(*), count(distinct(IMSI))	
+	from		
+		dc.${errTable} errRef,
+		$ccTable ccref,
+		$sccTable sccref,
+		$cptTable cptref
+	where
+		#GET_DATETIME_RANGE()		
+		and #GET_COLUMNS_WHERE_BY_TABLE("errRef" $columns)
+		and #GET_TAC_EXCLUSION()
+		and cptref.CAUSE_PROT_TYPE = errRef.CAUSE_PROT_TYPE
+		and ccref.CAUSE_CODE = errRef.CAUSE_CODE
+		and sccref.SUBCAUSE_CODE = errRef.SUBCAUSE_CODE
+        and ccref.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+	group by
+		ccref.CAUSE_CODE,
+		CAUSE_CODE_DESC,
+		sccref.SUBCAUSE_CODE,
+		SUBCAUSE_CODE_DESC,
+		SUBCAUSE_CODE_HELP,
+		cptref.CAUSE_PROT_TYPE,
+		CAUSE_PROT_TYPE_DESC,
+		#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+			)
+	as errAdvice(#GET_COLUMNS($columns) CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS)
+	)
+#end
+
+#if($useAggregationTables)
+select
+    #GET_COLUMNS_BY_TABLE("err" $columns)
+	CAUSE_PROT_TYPE as CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC as CAUSE_PROT_TYPE_DESC,
+    err.CAUSE_CODE as CAUSE_CODE,
+    CAUSE_CODE_DESC as CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE as SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC as SUBCAUSE_CODE_DESC,
+	err.ADVICE as whatnext,
+	sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    (select
+        count(distinct(IMSI))
+    from (
+	
+	#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+		(
+			#CCAS_SINGLE_AGG_SUB_QUERY($subscriberCountCols $rawNonLteTables)
+		)
+	#end
+	#if($rawLteTables.size() > 0 && $useLteTables)
+		
+		#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+			union all
+		#end
+		(
+			#CCAS_SINGLE_AGG_SUB_QUERY ($subscriberCountCols $rawLteTables)	
+		)
+	#end
+	)
+	as sub where sub.CAUSE_CODE = err.CAUSE_CODE and sub.SUBCAUSE_CODE = err.SUBCAUSE_CODE
+			and #GET_COLUMNS_WHERE_BY_TABLE('sub'$columns)
+	) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from (
+
+	#foreach ($errtable in $errTables)
+	
+		#if (($errtable.toString().indexOf($ApplicationConstants.SGEH) > -1) && $useNonLteTables)
+			#CCAS_SINGLE_AGG_QUERY($errtable $cptRefForSgeh $ccRefForSgeh $sccRefForSgeh false )
+		#elseif ($useLteTables)
+			#CCAS_SINGLE_AGG_QUERY($errtable $cptRefForLte $ccRefForLte $sccRefForLte true )
+		#end
+	
+		#if($velocityCount < $errTables.size())
+			union all
+		#end
+	
+	#end
+
+) as err (#GET_COLUMNS($columns) CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, NO_OF_ERRORS, ADVICE)
+
+group by
+    err.CAUSE_CODE,
+	CAUSE_CODE_DESC,
+	err.SUBCAUSE_CODE,
+	SUBCAUSE_CODE_DESC,
+	whatnext,
+	CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC,
+	#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+order by
+	#GET_COLUMNS_BY_TABLE("err" $columns)
+    err.CAUSE_CODE,
+	CAUSE_CODE_DESC,
+	err.SUBCAUSE_CODE,
+	SUBCAUSE_CODE_DESC,
+	whatnext,
+	CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC
+	
+#else
+
+select
+	#GET_COLUMNS_BY_TABLE("err" $columns)
+	CAUSE_PROT_TYPE as CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC as CAUSE_PROT_TYPE_DESC,
+    err.CAUSE_CODE as CAUSE_CODE,
+    CAUSE_CODE_DESC as CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE as SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC as SUBCAUSE_CODE_DESC,
+	err.advice as whatnext,
+	sum(isnull(err.NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    sum(isnull(err.NO_OF_TOTAL_ERR_SUBSCRIBERS, 0)) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from (
+
+	#foreach ($rawtable in $rawAllErrTables)
+	
+		#if (($rawtable.toString().indexOf($ApplicationConstants.SGEH) > -1) && $useNonLteTables)
+			#CCAS_NONAGG_QUERY($rawtable $cptRefForSgeh  $ccRefForSgeh $sccRefForSgeh false)
+		#elseif ($useLteTables)
+			#CCAS_NONAGG_QUERY($rawtable $cptRefForLte $ccRefForLte $sccRefForLte true)
+		#end
+	
+		#if($velocityCount < $rawAllErrTables.size())
+			union all
+		#end
+	
+	#end
+	
+) as err (#GET_COLUMNS($columns) CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS, ADVICE)
+
+	
+group by
+    err.CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC,
+	#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+order by
+	#GET_COLUMNS_BY_TABLE("err" $columns)
+    err.CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC
+#end	

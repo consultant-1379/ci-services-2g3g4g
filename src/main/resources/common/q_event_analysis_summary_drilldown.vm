@@ -1,0 +1,682 @@
+##=============================================================================
+##
+## Event Analysis: Percentage ratio/KPI drilldown
+##
+## Description: 
+##
+## Velocity Parameters:
+##
+## type : one of { SGSN, BSC, CELL, APN}
+##
+## drilltype : one of {APN, SGSN, BSC, CELL}
+##
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##
+##     TR_1 : normally query against raw events
+##     TR_2 : normally query against 1min agg
+##     TR_3 : normally query against 15min agg
+##     TR_4 : normally query against daily agg
+##
+## Named Prepared Statement Parameters:
+##
+##    :dateFrom starting time
+##    :dateTo ending time
+##    :$ApplicationConstants.SGSN_PARAM 
+## 
+
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+
+#if(${type} == $TYPE_APN)
+#if(${drilltype} == $TYPE_APN )
+#set($columns=[$APN, $SGSN])
+#set($ddcolumns=[$APN])
+#set($agg_t_SGEH="EVENT_E_SGEH_APN_EVENTID_EVNTSRC")
+#set($agg_t_LTE="EVENT_E_LTE_APN_EVENTID_EVNTSRC")
+#set($isone=false)
+#set($isfifteen=true)
+#set($isday=true)
+#elseif(${drilltype} == $TYPE_SGSN )
+#set($columns=[$RAT,$APN, $SGSN, $VENDOR, $BSC])
+#set($ddcolumns=[$APN, $SGSN])
+#set($agg_t_SGEH="EVENT_E_SGEH_APN_EVENTID_EVNTSRC_VEND_HIER3")
+#set($agg_t_LTE="EVENT_E_LTE_APN_EVENTID_EVNTSRC_VEND_HIER3")
+#set($isone=false)
+#set($isfifteen=false)
+#set($isday=true)
+#elseif(${drilltype} == $TYPE_BSC)
+#set($columns=[$RAT,$APN, $SGSN, $VENDOR, $BSC,$CELL])
+#set($ddcolumns=[$RAT,$APN, $SGSN, $VENDOR, $BSC])
+#set($isone=false)
+#set($isfifteen=false)
+#set($isday=false)
+#elseif(${drilltype} == $TYPE_CELL)
+#set($columns=[$RAT,$APN, $SGSN, $VENDOR, $BSC,$CELL,$CAUSE_CODE, $SUBCAUSE_CODE])
+#set($ddcolumns=[$RAT,$APN, $SGSN, $VENDOR, $BSC,$CELL])
+#set($isone=false)
+#set($isfifteen=false)
+#set($isday=false)
+#end
+
+#elseif(${type} == $TYPE_SGSN)
+    
+#if(${drilltype} == $TYPE_SGSN )
+#set($columns=[$RAT,$VENDOR,$BSC])
+#set($agg_t_SGEH="EVENT_E_SGEH_VEND_HIER3_EVENTID")
+#set($agg_t_LTE="EVENT_E_LTE_VEND_HIER3_EVENTID")
+#set($isone=true)
+#set($isfifteen=true)
+#set($isday=true)
+#elseif(${drilltype} == $TYPE_BSC)
+#set($columns=[$RAT,$VENDOR,$BSC, $CELL])
+#set($ddcolumns=[$RAT,$VENDOR,$BSC])
+#set($agg_t_SGEH="EVENT_E_SGEH_VEND_HIER321_EVENTID")
+#set($agg_t_LTE="EVENT_E_LTE_VEND_HIER321_EVENTID")
+#set($isone=false)
+#set($isfifteen=true)
+#set($isday=true)
+#elseif(${drilltype} == $TYPE_CELL)
+#set($columns=[$SGSN, $RAT, $VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+#set($ddcolumns=[$RAT,$SGSN, $VENDOR,$BSC, $CELL])
+#set($isone=false)
+#set($isfifteen=false)
+#set($isday=false)
+#end
+
+#else
+
+#if(${drilltype} == $TYPE_BSC)
+#set($columns=[$RAT,$VENDOR,$BSC, $CELL])
+#set($ddcolumns=[$RAT,$VENDOR,$BSC])
+#set($agg_t_SGEH="EVENT_E_SGEH_VEND_HIER321_EVENTID")
+#set($agg_t_LTE="EVENT_E_LTE_VEND_HIER321_EVENTID")
+#set($isone=false)
+#set($isfifteen=true)
+#set($isday=true)
+#elseif(${drilltype} == $TYPE_CELL)
+#set($columns=[$RAT,$VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+#set($ddcolumns=[$RAT,$VENDOR,$BSC, $CELL])
+#set($isone=false)
+#set($isfifteen=false)
+#set($isday=false)
+#end
+
+#end
+
+#if(${drilltype} != $TYPE_CELL && ${type} == $TYPE_SGSN)
+#set($joinsgsn=true)
+#else
+#set($joinsgsn=false)
+#end
+
+#if(${drilltype} == $TYPE_CELL)
+#set($ccscc=true)
+#else
+#set($ccscc=false)
+#end
+
+#if(($timerange == $ApplicationConstants.ONE_MINUTE && $isone) || ($timerange==$ApplicationConstants.FIFTEEN_MINUTES && $isfifteen) || ($timerange==$ApplicationConstants.DAY && $isday) )
+#set ($isagg=true)
+#set ($errviewSGEH="${agg_t_SGEH}_ERR$time")
+#set ($sucviewSGEH="${agg_t_SGEH}_SUC$time")
+#set ($errviewLTE="${agg_t_LTE}_ERR$time")
+#set ($sucviewLTE="${agg_t_LTE}_SUC$time")
+#else
+#set($isagg=false)
+#end
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($type))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#macro(KPI_RATIO_QUERY_FOR_NON_AGG $networkType $sucTablesToUseInQuery $errTablesToUseInQuery)
+(	select  
+		#if($joinsgsn)
+			#if($ccscc)
+				EVENT_SOURCE_NAME,
+			#else         
+				#GET_NOT_NULL_COLUMN (["suc","err"] [${SGSN}])
+			#end 
+		#end
+		#if($ccscc)
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("err" [${groupnameColumn}])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("err" $columns)
+			#end
+		#else   
+			#if($isgroup)
+				#GET_NOT_NULL_COLUMN (["suc","err"] [${groupnameColumn}])
+			#else		
+				#GET_NOT_NULL_COLUMN (["suc","err"] $columns)
+			#end
+		#end
+		#if($ccscc)
+			ccref.CAUSE_CODE_DESC,
+			sccref.SUBCAUSE_CODE_DESC,
+		#end
+		#if(${drilltype} != $TYPE_APN)
+			ratref.RAT_DESC,		
+		#end
+		etref.EVENT_ID as EVENT_ID,
+		etref.EVENT_ID_DESC,
+		isnull(NO_OF_ERRORS, 0) as NO_OF_ERRORS,
+		#if(!$ccscc)
+			sum(isnull(NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+			NO_OF_ERRORS + NO_OF_SUCCESSES as OCCURRENCES,
+			#CALCULATE_KPI_RATIO("etref" "err" "suc"),
+		#end
+		max(NO_OF_TOTAL_ERR_SUBSCRIBERS) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+		
+	from
+		(select  
+			#if($joinsgsn)        
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("temp_err" $columns)
+			#end
+			EVENT_ID,        
+			count(*),
+			sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end),
+			count(distinct(IMSI))
+		from
+			#if($isgroup)
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_err")
+				,$groupTable temp_group
+			#else
+				#if(!((!$ddcolumns) && ("$!ddcolumns" == ""))) 
+					#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_err" $ddcolumns)
+				#else
+					#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_err")
+				#end
+			#end
+			#if($joinsgsn)            
+				,dc.DIM_E_${networkType}_SGSN_HIER3 toporef            
+			#end
+		where
+			EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_err" "temp_group" $joinKeys)
+			#end           
+			#if($joinsgsn)       
+				and toporef.SGSN_NAME = :$SGSN
+				and temp_err.VENDOR = toporef.VENDOR
+				and temp_err.HIERARCHY_3 = toporef.HIERARCHY_3       
+				and toporef.STATUS = 'ACTIVE'
+			#end
+		group by
+			#if($joinsgsn)
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("temp_err" $columns)
+			#end     
+			EVENT_ID
+		) as err (
+			#if($joinsgsn)
+				EVENT_SOURCE_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS ([$groupnameColumn])
+			#else		
+				#GET_COLUMNS ($columns)
+			#end
+			EVENT_ID, 
+			NO_OF_ERRORS, 
+			NO_OF_NET_INIT_DEACTIVATES, 
+			NO_OF_TOTAL_ERR_SUBSCRIBERS)
+			
+    #if(!$ccscc)
+		full outer join
+		
+		(select
+			#if($joinsgsn)
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("temp_suc" $columns)
+			#end
+			EVENT_ID,
+			count(*),
+			sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end)
+		from
+			#if($isgroup)
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($sucTablesToUseInQuery "temp_suc")
+				,$groupTable temp_group
+			#else
+				#if(!((!$ddcolumns) && ("$!ddcolumns" == ""))) 
+					#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION($sucTablesToUseInQuery "temp_suc" $ddcolumns)
+				#else
+					#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($sucTablesToUseInQuery "temp_suc")
+				#end
+			#end
+			#if($joinsgsn)            
+				,dc.DIM_E_${networkType}_SGSN_HIER3 toporef            
+			#end
+		where
+			EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_suc" "temp_group" $joinKeys)
+			#end           
+			#if($joinsgsn)       
+				and toporef.SGSN_NAME = :$SGSN
+				and temp_suc.VENDOR = toporef.VENDOR
+				and temp_suc.HIERARCHY_3 = toporef.HIERARCHY_3       
+				and toporef.STATUS = 'ACTIVE'
+			#end 
+		group by
+			#if($joinsgsn)
+				toporef.SGSN_NAME,
+			#end        
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("temp_suc" $columns)
+			#end      
+			EVENT_ID
+		) as suc (    
+			#if($joinsgsn)    
+				EVENT_SOURCE_NAME,     
+			#end
+			#if($isgroup)
+				#GET_COLUMNS ([$groupnameColumn])
+			#else		
+				#GET_COLUMNS ($columns)
+			#end
+			EVENT_ID, 
+			NO_OF_SUCCESSES, 
+			NO_OF_NET_INIT_DEACTIVATES)
+			
+		on (
+			#if($joinsgsn)        
+				#GET_JOIN("suc" "err" [${SGSN}]) and     
+			#end
+			#if($isgroup)
+				#GET_JOIN("suc" "err" [$groupnameColumn])
+			#else		
+				#GET_JOIN("suc" "err" $columns)
+			#end
+			and #GET_JOIN("suc" "err" ["EVENT_ID"])        
+		)
+	#end
+	
+		,DIM_E_${networkType}_EVENTTYPE etref
+		#if(${drilltype} != $TYPE_APN)
+			,DIM_E_SGEH_RAT ratref
+		#end
+		
+    #if($ccscc)
+			,dc.DIM_E_${networkType}_CAUSECODE ccref
+			,dc.DIM_E_${networkType}_SUBCAUSECODE sccref
+		where
+			err.EVENT_ID = etref.EVENT_ID
+			and err.CAUSE_CODE = ccref.CAUSE_CODE
+			and err.SUBCAUSE_CODE = sccref.SUBCAUSE_CODE
+		#if(${drilltype} != $TYPE_APN)
+			and err.RAT = ratref.RAT
+		#end
+    #else
+		where
+			isnull(suc.EVENT_ID, err.EVENT_ID) = etref.EVENT_ID
+			#if(${drilltype} != $TYPE_APN)
+				and isnull(suc.RAT, err.RAT) = ratref.RAT
+			#end
+    #end
+	group by    
+		#if($joinsgsn)
+			EVENT_SOURCE_NAME,
+		#end
+		#if($ccscc)
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("err" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("err" $columns)
+			#end
+		#else
+			#if($isgroup)
+				#GET_COLUMNS ([$groupnameColumn])
+			#else		
+				#GET_COLUMNS ($columns)
+			#end
+		#end
+		#if($ccscc)
+			ccref.CAUSE_CODE_DESC,
+			sccref.SUBCAUSE_CODE_DESC,
+		#end
+		#if(${drilltype} != $TYPE_APN)
+			ratref.RAT_DESC,
+		#end	
+		etref.EVENT_ID,
+		etref.EVENT_ID_DESC,
+		NO_OF_ERRORS
+	having
+		EVENT_ID between 0 and 255
+		##EVENT_ID is a tinyint in database
+)
+#end
+
+#macro(KPI_RATIO_QUERY_FOR_AGG $networkType $sucTablesToUseInQuery $errTablesToUseInQuery)
+(
+	select    
+		#if($joinsgsn)      
+			#GET_NOT_NULL_COLUMN (["suc","err","sub"] [${SGSN}])    
+		#end
+		#if($isgroup)
+			#GET_NOT_NULL_COLUMN(["suc","err", "sub"] [${groupnameColumn}])
+		#else
+			#GET_NOT_NULL_COLUMN (["suc","err","sub"] $columns)
+		#end
+		#if(${drilltype} != $TYPE_APN)
+			ratref.RAT_DESC,		
+		#end
+		etref.EVENT_ID as EVENT_ID,
+		etref.EVENT_ID_DESC,
+		sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+		sum(isnull(NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+		NO_OF_ERRORS + NO_OF_SUCCESSES as OCCURRENCES,
+		#CALCULATE_KPI_RATIO("etref" "err" "suc"),
+		max(NO_OF_TOTAL_ERR_SUBSCRIBERS) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+	
+	from
+    (
+		select         
+			#if($joinsgsn)      
+				toporef.SGSN_NAME,        
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_err" $columns)
+			#end
+			EVENT_ID,        
+			sum(NO_OF_ERRORS),
+			sum(NO_OF_NET_INIT_DEACTIVATES)
+		from
+			#if($networkType == $ApplicationConstants.LTE)
+				dc.$errviewLTE temp_err
+			#elseif($networkType == $ApplicationConstants.SGEH)
+				dc.$errviewSGEH temp_err
+			#end
+			#if($joinsgsn)              
+				,dc.DIM_E_${networkType}_SGSN_HIER3 toporef   
+			#end
+			#if($isgroup)
+				,$groupTable temp_group
+			#end
+		where
+			#GET_DATETIME_RANGE()
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_err" "temp_group" $joinKeys)
+			#else
+				#if(!((!$ddcolumns) && ("$!ddcolumns" == "")))
+					and #GET_COLUMNS_WHERE_BY_TABLE ('temp_err' $ddcolumns)
+				#end  
+			#end
+			and EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+			#if($joinsgsn)                     
+				and toporef.SGSN_NAME = :$SGSN
+				and temp_err.VENDOR = toporef.VENDOR
+				and temp_err.HIERARCHY_3 = toporef.HIERARCHY_3      
+				and toporef.STATUS = 'ACTIVE'
+			#end	
+		group by
+			#if($joinsgsn)      
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_err" $columns)
+			#end     
+			EVENT_ID
+    ) as err (
+        #if($joinsgsn)      
+			EVENT_SOURCE_NAME,
+		#end
+		#if($isgroup)
+			#GET_COLUMNS ([$groupnameColumn])
+		#else
+			#GET_COLUMNS ($columns)
+		#end
+        EVENT_ID, 
+		NO_OF_ERRORS, 
+		NO_OF_NET_INIT_DEACTIVATES)
+		
+    full outer join
+    (
+		select
+			#if($joinsgsn)      
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_suc" $columns)
+			#end      
+			EVENT_ID,        
+			sum(NO_OF_SUCCESSES),        
+			sum(NO_OF_NET_INIT_DEACTIVATES) 
+		from
+			#if($networkType == $ApplicationConstants.LTE)
+				dc.$sucviewLTE temp_suc
+			#elseif($networkType == $ApplicationConstants.SGEH)
+				dc.$sucviewSGEH temp_suc
+			#end
+			#if($joinsgsn)              
+				,dc.DIM_E_${networkType}_SGSN_HIER3 toporef   
+			#end
+			#if($isgroup)
+				,$groupTable temp_group
+			#end
+		where
+			#GET_DATETIME_RANGE()
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_suc" "temp_group" $joinKeys)
+			#else
+				#if(!((!$ddcolumns) && ("$!ddcolumns" == "")))
+					and #GET_COLUMNS_WHERE_BY_TABLE('temp_suc' $ddcolumns)
+				#end 
+			#end
+			and EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+			#if($joinsgsn)              
+				and toporef.SGSN_NAME = :$SGSN
+				and temp_suc.VENDOR = toporef.VENDOR
+				and temp_suc.HIERARCHY_3 = toporef.HIERARCHY_3
+				and toporef.STATUS = 'ACTIVE'
+			#end              
+		group by  
+			#if($joinsgsn)      
+				toporef.SGSN_NAME,        
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_suc" $columns)
+			#end         
+			EVENT_ID
+    ) as suc (      
+        #if($joinsgsn)        
+			EVENT_SOURCE_NAME,     
+        #end
+        #if($isgroup)
+			#GET_COLUMNS ([$groupnameColumn])
+		#else
+			#GET_COLUMNS ($columns)
+		#end
+        EVENT_ID, 
+		NO_OF_SUCCESSES, 
+		NO_OF_NET_INIT_DEACTIVATES)
+    
+	on (
+        #if($joinsgsn)        
+			#GET_JOIN("suc" "err" [${SGSN}]) and     
+		#end
+		#if($isgroup)
+			#GET_JOIN("suc" "err" [$groupnameColumn])
+		#else
+			#GET_JOIN("suc" "err" $columns)
+		#end
+        and #GET_JOIN("suc" "err" ["EVENT_ID"]) 
+    )
+    
+	full outer join
+    (
+		select    
+			#if($joinsgsn)          
+				toporef.SGSN_NAME,        
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_sub" $columns)
+			#end 
+			EVENT_ID,   
+			count(distinct(IMSI))
+		from 
+			#if($isgroup)
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_sub")
+				,$groupTable temp_group
+			#else
+				#if(!((!$ddcolumns) && ("$!ddcolumns" == ""))) 
+					#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_sub" $ddcolumns)
+				#else
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_sub")
+			#end
+		#end
+			#if($joinsgsn)            
+				,dc.DIM_E_${networkType}_SGSN_HIER3 toporef   
+			#end
+		where
+			EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_sub" "temp_group" $joinKeys)
+			#end           
+			#if($joinsgsn)       
+				and toporef.SGSN_NAME = :$SGSN
+				and temp_sub.VENDOR = toporef.VENDOR
+				and temp_sub.HIERARCHY_3 = toporef.HIERARCHY_3       
+				and toporef.STATUS = 'ACTIVE'
+			#end
+		group by
+			#if($joinsgsn)      
+				toporef.SGSN_NAME,
+			#end
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_sub" $columns)
+			#end       
+			EVENT_ID
+    ) as sub (     
+        #if($joinsgsn)         
+			EVENT_SOURCE_NAME,
+        #end
+        #if($isgroup)
+			#GET_COLUMNS ([$groupnameColumn])
+		#else
+			#GET_COLUMNS ($columns)
+		#end  
+        EVENT_ID, 
+		NO_OF_TOTAL_ERR_SUBSCRIBERS)
+		
+    on(
+        #if($joinsgsn)        
+			#GET_MULTI_JOIN(["suc","err"] "sub" [${SGSN}]) and        
+		#end
+		#if($isgroup)
+			#GET_MULTI_JOIN(["suc","err"] "sub" [$groupnameColumn]) 
+		#else
+			#GET_MULTI_JOIN(["suc","err"] "sub" $columns) 
+		#end            
+        and #GET_MULTI_JOIN(["suc","err"] "sub" ["EVENT_ID"])                     
+    )
+		,DIM_E_${networkType}_EVENTTYPE etref
+		#if(${drilltype} != $TYPE_APN)
+			,DIM_E_SGEH_RAT ratref
+		#end
+	where
+		isnull(suc.EVENT_ID, err.EVENT_ID, sub.EVENT_ID) = etref.EVENT_ID
+		#if(${drilltype} != $TYPE_APN)
+			and isnull(suc.RAT, err.RAT, sub.RAT) = ratref.RAT
+		#end
+	group by    
+		#if($joinsgsn)
+			EVENT_SOURCE_NAME,
+		#end
+		#if($isgroup)
+			#GET_COLUMNS ([$groupnameColumn])
+		#else
+			#GET_COLUMNS ($columns)
+		#end  
+		#if(${drilltype} != $TYPE_APN)
+			ratref.RAT_DESC,
+		#end
+		etref.EVENT_ID,
+		etref.EVENT_ID_DESC
+	having
+		EVENT_ID between 0 and 255
+		##EVENT_ID is a tinyint in database
+)	
+#end	
+
+#if($isagg)
+	select 
+		*
+	from (
+		#if($techPackTablesSGEH.getErrTables().size() > 0  && $techPackTablesSGEH.getSucTables().size() > 0 && $useNonLteTables)
+			#KPI_RATIO_QUERY_FOR_AGG($ApplicationConstants.SGEH $techPackTablesSGEH.getSucTables() $techPackTablesSGEH.getErrTables())
+		#end
+		#if($techPackTablesLTE.getErrTables().size() > 0  && $techPackTablesLTE.getSucTables().size() > 0 && $useLteTables)
+			#if($techPackTablesSGEH.getErrTables().size() > 0  && $techPackTablesSGEH.getSucTables().size() > 0 && $useNonLteTables)
+				union all
+			#end
+			#KPI_RATIO_QUERY_FOR_AGG($ApplicationConstants.LTE $techPackTablesLTE.getSucTables() $techPackTablesLTE.getErrTables())
+		#end
+		) KPI_RATIO_RESULT
+	order by
+		KPI
+#else	
+	select 
+		*
+	from (
+		#if($techPackTablesSGEH.getErrTables().size() > 0  && $techPackTablesSGEH.getSucTables().size() > 0 && $useNonLteTables)
+			#KPI_RATIO_QUERY_FOR_NON_AGG($ApplicationConstants.SGEH $techPackTablesSGEH.getSucTables() $techPackTablesSGEH.getErrTables())
+		#end
+		#if($techPackTablesLTE.getErrTables().size() > 0  && $techPackTablesLTE.getSucTables().size() > 0 && $useLteTables)
+			#if($techPackTablesSGEH.getErrTables().size() > 0  && $techPackTablesSGEH.getSucTables().size() > 0 && $useNonLteTables)
+				union all
+			#end
+			#KPI_RATIO_QUERY_FOR_NON_AGG($ApplicationConstants.LTE $techPackTablesLTE.getSucTables() $techPackTablesLTE.getErrTables())
+		#end
+		) KPI_RATIO_RESULT
+	order by
+	#if($ccscc)
+		NO_OF_ERRORS
+	#else
+		KPI
+	#end
+#end

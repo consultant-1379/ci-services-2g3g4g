@@ -1,0 +1,79 @@
+##=============================================================================
+##
+## QOS group summary query
+## -----------------------------------
+##
+## List summary data by group for each QCI (Quality Class Indicator)
+##
+## Parameters:
+##
+## 
+## type: type of node
+## SUFFIX_FOR_AGGREGATION_TABLE: one of _DAY, _1MIN, _15MIN
+## techPackTables: see javadoc on the TechPackTables object for more on this
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+
+begin
+
+declare local temporary table qci_summary
+(  
+	qci_id smallint NULL,
+    qci_description varchar(128) NULL,
+    no_of_errors int NULL,    
+    no_of_successes int NULL,
+	impacted_subscribers int NULL
+);
+
+#foreach($i in [1..10])
+insert into qci_summary (
+select 
+	$i,
+	QCI_ID_DESCRIPTION,		
+	isnull(FAILURES,0) as FAILURES,
+	isnull(SUCCESSES,0) as SUCCESSES, 
+	isnull(IMPACTED_SUBSCRIBERS,0) as IMPACTED_SUBSCRIBERS
+from
+	(select
+		sum(QCI_ERR_$i) as FAILURES,
+		count(distinct(IMSI)) 
+	from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS_GROUPS($rawtables.getErrTables() "errview" ["QCI_ERR_$i", "IMSI"])
+	where
+		QCI_ERR_$i <> 0
+		) as err(FAILURES, IMPACTED_SUBSCRIBERS),
+	(select
+		sum(QCI_SUC_$i) as SUCCESSES
+	from	
+		$AGGREGATION_TABLES.getSucTables() as sucview
+		,$groupTable group_table
+	where		
+		#GET_DATETIME_RANGE()
+		and #GET_JOIN("sucview" "group_table" $joinKeys)
+        and group_table.GROUP_NAME = :$ApplicationConstants.GROUP_NAME_PARAM
+		) as suc(SUCCESSES), 
+	(select 
+		QCI_ID_DESCRIPTION
+	from
+		DIM_E_LTE_QCI
+	where QCI_NUMBER=$i ) as qci_description
+	);
+#end
+
+select 
+	QCI_ID,
+	QCI_DESCRIPTION, 
+	NO_OF_ERRORS,
+	NO_OF_SUCCESSES, 
+	IMPACTED_SUBSCRIBERS
+from qci_summary;
+
+drop table qci_summary;
+end

@@ -1,0 +1,13 @@
+##=============================================================================
+##
+## Cause code query returning all codes for the sub cause code table
+##
+##=============================================================================
+select
+    subcause_code,
+	subcause_code_desc,
+	subcause_code_help
+from
+    dc.DIM_E_SGEH_SUBCAUSECODE
+order by
+    subcause_code

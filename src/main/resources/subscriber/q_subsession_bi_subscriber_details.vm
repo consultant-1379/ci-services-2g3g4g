@@ -1,0 +1,131 @@
+##
+## Subsession Business Intelligence - Subscriber Details
+##
+## Description: 
+##
+##     Subscriber Details for an IMSI.
+##
+## Parameter:   IMSI
+##
+## Author : eavidat
+## Date   : Aug 2010
+
+#DEFINE_CONSTANTS()
+
+#set($rawTablesLTE = $techPackTablesLTE.getRawTables())
+#set($rawTablesSGEH = $techPackTablesSGEH.getRawTables())
+
+#if(${type}==$TYPE_IMSI)
+    #set($columns=[$IMSI])
+	#set($useLteTables = true)
+#elseif(${type}==$TYPE_PTMSI)
+	#set($columns=[$PTMSI])
+	#set($useLteTables = false)
+#end
+
+#set($rawViewName = "rawview")
+#set($columnsToSelect = ["IMSI", "PTMSI", "ROAMING", "HIERARCHY_1", "HIERARCHY_3", "VENDOR", "RAT", "MCC", "MNC", "LAC", "RAC", "EVENT_SOURCE_NAME", "IMSI_MCC", "IMSI_MNC", "TAC"])
+#set($columnsToSelectLTE = ["DATETIME_ID", "IMSI", "null as PTMSI", "ROAMING", "HIERARCHY_1", "HIERARCHY_3", "VENDOR", "RAT", "MCC", "MNC", "null as LAC", "null as RAC", "EVENT_SOURCE_NAME", "IMSI_MCC", "IMSI_MNC", "TAC"])
+#set($columnsToSelectSGEH = ["DATETIME_ID", "IMSI", "PTMSI", "ROAMING", "HIERARCHY_1", "HIERARCHY_3", "VENDOR", "RAT", "MCC", "MNC", "LAC", "RAC", "EVENT_SOURCE_NAME", "IMSI_MCC", "IMSI_MNC", "TAC"])
+
+
+#macro(SUBBI_DATA_QUERY)
+(
+ #if($rawTablesSGEH.size() > 0)
+	#foreach ($rawtable in $rawTablesSGEH)
+			select
+				#GET_COLUMNS_NO_COMMA_TRAILING($columnsToSelectSGEH)
+			from dc.$rawtable where
+			##this if...else..block only apply to this template
+			##for other templates, it should be different
+			#GET_COLUMNS_WHERE_BY_TABLE($rawtable $columns)	
+			#if($velocityCount < $rawTablesSGEH.size())
+					union all
+			#end
+	#end
+ #end
+ #if($rawTablesLTE.size() > 0 && $useLteTables)
+	#if($rawTablesSGEH.size() > 0)
+	union all
+	#end
+	#foreach ($rawtable in $rawTablesLTE)
+		select
+			#GET_COLUMNS_NO_COMMA_TRAILING($columnsToSelectLTE)
+		from dc.$rawtable where
+		##this if...else..block only apply to this template
+		##for other templates, it should be different
+		#GET_COLUMNS_WHERE_BY_TABLE($rawtable $columns)	
+		#if($velocityCount < $rawTablesLTE.size())
+				union all
+		#end
+	#end
+ #end
+ )as  temp_raw
+#end
+
+#macro(INSERT_MSISDN_VALUE $rawType)
+#if(${rawType}==$TYPE_IMSI)
+insert into temp_imsi_msisdn_table (
+    SELECT LIST(MSISDN) AS MSISDN FROM dc.DIM_E_IMSI_MSISDN  where IMSI = :IMSI
+);
+#end
+#end
+
+BEGIN
+
+DECLARE local temporary table temp_imsi_msisdn_table
+(     
+    msisdn VARCHAR(255) NULL
+);
+
+#INSERT_MSISDN_VALUE($type)
+
+select 
+	TOP 1
+	#if(${type}==$TYPE_IMSI)
+	(case when (GROUP_NAME = 'VIP') then 1 else 0 end) as VIP_Status,
+	imsiMap.MSISDN AS MSISDN,
+	#end
+	mccmncref.COUNTRY as Home_Country, 
+	mccmncref.OPERATOR as Mobile_Network_Operator, 
+	(case when (rawview.ROAMING = 1 ) then '$ApplicationConstants.ROAMING_STATUS_AWAY' else '$ApplicationConstants.ROAMING_STATUS_HOME' end) as Roaming_Status, 
+	rawview.HIERARCHY_1 || '-'  || rawview.HIERARCHY_3 || '-'  || rawview.VENDOR + '-'  || convert (char(1), rawview.RAT) as Last_Cell_Location, 
+    CASE 
+        WHEN rawview.LAC IS NULL AND rawview.RAC IS NULL    ## when we're looking at a 4G table
+        THEN (rawview.MCC || '-' || rawview.MNC + '-' || rawview.TAC)  
+        ELSE (rawview.MCC || '-' || rawview.MNC + '-' || rawview.LAC || '-' || rawview.RAC)
+    END as Last_Routing_Area,
+	rawview.EVENT_SOURCE_NAME as Last_Observed_SGSN, 
+	rawview.MIN_DATETIME      AS First_Observed,
+    rawview.MAX_DATETIME      AS Last_Observed,
+	rawview.PTMSI as Last_Observed_PTMSI 
+from 
+	(SELECT
+            MIN(DATETIME_ID) AS MIN_DATETIME,
+            MAX(DATETIME_ID) AS MAX_DATETIME,
+            #GET_COLUMNS_NO_COMMA_TRAILING($columnsToSelect)
+	FROM
+	#SUBBI_DATA_QUERY()
+	GROUP BY
+	#GET_COLUMNS_NO_COMMA_TRAILING($columnsToSelect))
+	AS rawview
+	,
+    #if(${type}==$TYPE_IMSI)
+	dc.GROUP_TYPE_E_IMSI imsigroup,
+	temp_imsi_msisdn_table imsiMap,
+	#end
+    dc.DIM_E_SGEH_MCCMNC mccmncref, 
+    dc.DIM_E_SGEH_RAT ratref 
+where
+	#if(${type}==$TYPE_IMSI)
+    rawview.IMSI *= imsigroup.IMSI
+	and
+	#end
+	rawview.RAT = ratref.RAT           
+    and IMSI_MCC = mccmncref.MCC 
+    and IMSI_MNC = mccmncref.MNC 
+;
+
+drop table temp_imsi_msisdn_table;
+end
+		

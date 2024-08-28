@@ -1,0 +1,147 @@
+##
+## Device Analysis - Attach/Activate/Mobility failure analysis
+## See http://atrclin2.athtem.eei.ericsson.se/wiki/index.php/ENIQ_Events_Services_Design_Rules for the design rules
+## on exclusive TAC handling that apply to this query
+##
+## Description: 
+##
+##     Get the total number of errors for attach/activate/rau/israu event types for device groups
+##
+## Parameter: 
+##	AGGREGATION_TABLES - aggregation tables for use in query, see TechPackTables javadoc for more info
+##	RAW_TABLES - raw tables for use in query, see TechPackTables javadoc for more info
+##  EVENT_IDS - string in format of (0,5), where 0 and 5 are the event ids to include in query
+##  count - number of rows to include in final result
+##  useAggregationTables - boolean, indicates whether to use raw or aggregation tables
+##
+## 
+##
+## count : number of device groups having most mobility/attach/activate failures
+##
+
+##-----------------------------------------------------------------------------
+## counts number of rows for exclusive tacs in raw error tables
+##
+## rawtables: TechPackTables object containing raw tables
+##-----------------------------------------------------------------------------
+#macro (SUM_ERRORS_FOR_EXCLUSIVE_TAC_GROUP_SPECIFY_COLUMNS $rawTables)
+	#SUM_VALUES_FOR_EXCLUSIVE_TAC_GROUP_SPECIFY_COLUMNS($rawTables.getErrTables())
+#end
+
+##-----------------------------------------------------------------------------
+## counts number of rows for exclusive tacs in raw tables
+##
+## rawtables: list of raw tables
+##-----------------------------------------------------------------------------
+#macro (SUM_VALUES_FOR_EXCLUSIVE_TAC_GROUP_SPECIFY_COLUMNS $rawTables)
+	select	
+		GROUP_NAME,
+		count(*)
+		from
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($rawTables "tempView" ["EVENT_ID", "TAC"])
+			,dc.GROUP_TYPE_E_TAC tacgroup
+		where
+			EVENT_ID in $EVENT_IDS and
+			 tempView.TAC = tacgroup.TAC        
+			 #AND_IS_EXCLUSIVE_TAC_GROUP()
+		group by
+			GROUP_NAME		
+#end
+
+#macro(SELECT_NO_OF_ERRORS_FROM_AGGREGATION_VIEW $view)
+	select 
+	    tacgroup.GROUP_NAME,   	   
+	    sum(NO_OF_ERRORS) as NO_OF_ERRORS	   
+	from		
+	    $view err,		
+	    dc.GROUP_TYPE_E_TAC tacgroup     
+	where
+	    EVENT_ID in $EVENT_IDS		
+	    #AND_DATETIME_RANGE()		
+	    and err.TAC = tacgroup.TAC
+	group by
+	    GROUP_NAME
+#end	
+
+#DEFINE_CONSTANTS()
+
+
+
+#set($aggErrViews=$AGGREGATION_TABLES.getErrTables())
+#set($rawErrTables=$RAW_TABLES.getErrTables())
+#set($columnsToSelectFromRawTables=["IMSI", "EVENT_ID", "TAC"])
+
+select
+	#if($count > 0)
+	  top $count
+	#end
+	rank() over (order by NO_OF_ERRORS desc) as RANK,
+	isnull(errors.GROUP_NAME, subscribers.GROUP_NAME) as GROUP_NAME,
+	max(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+	max(isnull(NO_OF_TOTAL_ERR_SUBSCRIBERS,0)) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from
+	(
+	#if($useAggregationTables)
+		select 
+	    aggErr.GROUP_NAME,   	   
+	    sum(NO_OF_ERRORS) as NO_OF_ERRORS	   
+		from (
+			#foreach ($aggView in $aggErrViews)
+				#SELECT_NO_OF_ERRORS_FROM_AGGREGATION_VIEW($aggView)
+				#if ( $velocityCount < $aggErrViews.size())
+						union all
+				#end
+			#end 
+		) as aggErr 
+		group by GROUP_NAME
+	union all
+		#SUM_ERRORS_FOR_EXCLUSIVE_TAC_GROUP_SPECIFY_COLUMNS($RAW_TABLES)			
+	#else
+	select 
+	    tacgroup.GROUP_NAME,
+	    count(*) as NO_OF_ERRORS	
+	from		
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($rawErrTables "err" $columnsToSelectFromRawTables),		
+	    dc.GROUP_TYPE_E_TAC tacgroup     
+	where
+	    EVENT_ID in $EVENT_IDS
+	    and err.TAC = tacgroup.TAC
+	group by
+	    GROUP_NAME
+	union all
+	select 
+	    tacgroup.GROUP_NAME,
+	    count(*) as NO_OF_ERRORS	
+	from		
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($rawErrTables "err" $columnsToSelectFromRawTables),		
+	    dc.GROUP_TYPE_E_TAC tacgroup     
+	where
+	    EVENT_ID in $EVENT_IDS
+	    and err.TAC = tacgroup.TAC
+		#AND_IS_EXCLUSIVE_TAC_GROUP()
+	group by
+	    GROUP_NAME
+	#end
+		)as errors(
+    		GROUP_NAME,NO_OF_ERRORS)
+	full outer join
+    (select
+    	tacgroup.GROUP_NAME,
+    	count(distinct(IMSI))
+    from
+    	#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($rawErrTables "rawview" $columnsToSelectFromRawTables),
+    	dc.GROUP_TYPE_E_TAC tacgroup 
+    where
+		EVENT_ID in $EVENT_IDS
+	    and tacgroup.TAC = rawview.TAC 
+    group by
+		GROUP_NAME
+    )as subscribers(
+    	GROUP_NAME,NO_OF_TOTAL_ERR_SUBSCRIBERS)
+    on(
+		errors.GROUP_NAME = subscribers.GROUP_NAME
+    ) 
+group by
+	GROUP_NAME
+order by
+	RANK   

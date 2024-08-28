@@ -1,0 +1,93 @@
+##
+## Device Analysis - Most popular device group drilldown
+## See http://atrclin2.athtem.eei.ericsson.se/wiki/index.php/ENIQ_Events_Services_Design_Rules for the design rules
+## on exclusive TAC handling that apply to this query
+##
+## Description: 
+##
+##     It shall be possible to drilldown by group name
+##
+## Parameter: 
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for error/success part of the query
+##
+#macro (SUM_TACS_IN_AGGREGATION_TABLES $view $columnToSum)
+	select
+        temp.TAC as TAC,        
+        sum($columnToSum)        
+    from 		
+		$view temp,        
+        dc.GROUP_TYPE_E_TAC tacgroup
+    where		
+        #GET_DATETIME_RANGE()
+		and        
+		tacgroup.GROUP_NAME = :groupname
+        and tacgroup.TAC = temp.TAC
+    group by
+        TAC
+#end		
+
+#DEFINE_CONSTANTS()
+#set($columnsToSelectFromRawTables=["TAC"])
+
+select
+    tacref.MANUFACTURER,
+    isnull(tacref.Marketing_Name, convert(varchar(12),total.TAC)) as Marketing_Name,
+    total.TAC,
+    sum(NO_OF_EVENTS) as NO_OF_EVENTS
+from
+    (
+	#if($useAggregationTables)		
+		#foreach ($aggView in $AGGREGATION_TABLES.getErrTables())
+			#SUM_TACS_IN_AGGREGATION_TABLES($aggView "NO_OF_ERRORS")
+			#if ( $velocityCount < $AGGREGATION_TABLES.getErrTables().size())
+				union all
+			#end
+		#end
+	#else
+	select
+        err.TAC as TAC,      
+        count(*)        
+    from 		
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_HANDLE_TAC_EXCLUSION_SPECIFY_COLUMNS($groupname $RAW_TABLES.getErrTables() "err" $columnsToSelectFromRawTables),
+        dc.GROUP_TYPE_E_TAC tacgroup
+    where		
+		tacgroup.GROUP_NAME = :groupname
+        and tacgroup.TAC = err.TAC
+    group by
+        TAC
+	#end		
+    union all
+	#if($useAggregationTables)		
+		#foreach ($aggView in $AGGREGATION_TABLES.getSucTables())
+			#SUM_TACS_IN_AGGREGATION_TABLES($aggView "NO_OF_SUCCESSES")
+			#if ( $velocityCount < $AGGREGATION_TABLES.getSucTables().size())
+				union all
+			#end
+		#end		
+	#else
+    select
+        suc.TAC as TAC,     
+        count(*)                
+    from 		
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_HANDLE_TAC_EXCLUSION_SPECIFY_COLUMNS($groupname $RAW_TABLES.getSucTables() "suc" $columnsToSelectFromRawTables),        
+        dc.GROUP_TYPE_E_TAC tacgroup
+    where
+		tacgroup.GROUP_NAME = :groupname
+        and tacgroup.TAC = suc.TAC
+    group by
+        TAC
+    #end
+	) as total(TAC, NO_OF_EVENTS),
+    dc.DIM_E_SGEH_TAC tacref    
+where
+    total.TAC *= tacref.TAC
+group by
+    total.TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME    
+order by
+    NO_OF_EVENTS
+        

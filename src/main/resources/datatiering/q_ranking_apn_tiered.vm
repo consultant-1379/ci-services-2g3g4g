@@ -1,0 +1,86 @@
+##=============================================================================
+##
+## Ranking
+##
+## Description: 
+## Ranking query that queries err raw table and suc 15min aggregation table for APN ranking results
+##  
+## Velocity parameter:
+## count : number of rows returned
+##
+## Named PreparedStatement Parameter:
+## :dateFrom - starting time
+## :dateTo - ending time
+##
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($columns=["APN"])
+
+select 
+	#if($count > 0)
+	  top $count
+	#end
+	rank() over (order by NO_OF_ERRORS desc) as RANK,	
+    isnull(err.APN,suc.APN)      			 as APN,
+	isnull(NO_OF_ERRORS, 0) 			 as NO_OF_ERRORS,    
+    isnull(NO_OF_SUCCESSES,0) 			 as NO_OF_SUCCESSES
+from 
+(
+    (select
+    	APN,
+        count(*)
+    from
+        (
+        #foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+            #set($rawErrTables=$techPack.getRawErrTables())
+    	    #set($dimApnTable=$techPack.getStaticLookupTechpack())
+    		
+    		## We will only add the "union all" if there is error rawtables in this tech pack
+    		#if($velocityCount > 1)
+    			#if($techPack.getRawErrTables().size() > 0)
+    				union all
+    			#end
+    		#end
+    		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_APN_IN_DIM_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($rawErrTables "err" $columns "${dimApnTable}_APN")
+        #end
+        ) as temp_error
+	group by
+		APN
+	)as err(
+        APN,
+        NO_OF_ERRORS
+    )
+    FULL OUTER JOIN
+    (select
+        APN,
+        sum(NO_OF_SUCCESSES)
+    from
+        (
+        #foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+			#if($velocityCount >1)
+				union all
+			#end
+			#set($sucAggView=$techPack.getSucAggregationView())
+	        #set($dimApnTable=$techPack.getStaticLookupTechpack())
+			select 
+				APN, 
+				NO_OF_SUCCESSES	
+			from $sucAggView 
+			where #GET_DATETIME_RANGE()
+                and APN in (
+					#GET_APN_LAST_SEEN("${dimApnTable}_APN")
+				)
+		#end
+   		) as temp_success
+	group by
+        APN
+    ) as suc(
+        APN,
+        NO_OF_SUCCESSES
+    )
+    on(
+        err.APN  = suc.APN
+    )
+)
+order by
+  RANK

@@ -1,0 +1,273 @@
+##=============================================================================
+##
+## Event Analysis: Percentage ratio/KPI drilldown
+##
+## Description: 
+##
+## Velocity Parameters:
+##
+## type : SGSN
+##
+## drilltype : SGSN or BSC or CELL
+##
+##
+## Named Prepared Statement Parameters:
+##
+##    :dateFrom starting time
+##    :dateTo ending time
+##    :$ApplicationConstants.EVENT_ID
+##    :$SGSN
+##    :$BSC
+##    :$RAT
+##    :$VENDOR
+##    :$CELL
+
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#if(${drilltype} == $TYPE_SGSN )
+    #set($columns=[$SGSN,$RAT,$VENDOR,$BSC])
+	#set($columnsToSelectErrorRAW=[$SGSN,$RAT,$VENDOR,$BSC, $IMSI, $EVENT_ID])
+	#set($conditionToSelectErrorRAW="and ${EVENT_ID} = :$ApplicationConstants.EVENT_ID_PARAM and $SGSN = :$SGSN")
+	#set($agg_t_SGEH="EVENT_E_SGEH_APN_EVENTID_EVNTSRC_VEND_HIER3")
+    #set($agg_t_LTE="EVENT_E_LTE_APN_EVENTID_EVNTSRC_VEND_HIER3")
+#elseif(${drilltype} == $TYPE_BSC)
+    #set($columns=[$SGSN,$RAT,$VENDOR,$BSC, $CELL])
+	#set($columnsToSelectErrorRAW=[$SGSN, $RAT,$VENDOR,$BSC, $CELL, $IMSI, $EVENT_ID])
+	#set($conditionToSelectErrorRAW="and $EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM and $SGSN = :$SGSN and $BSC = :$BSC and $RAT = :$RAT and $VENDOR = :$VENDOR")
+    #set($agg_t_SGEH="EVENT_E_SGEH_VEND_HIER321_EVENTID")
+    #set($agg_t_LTE="EVENT_E_LTE_VEND_HIER321_EVENTID")
+#elseif(${drilltype} == $TYPE_CELL)
+    #set($columns=[$SGSN, $RAT, $VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+	#set($columnsToSelectErrorRAW=[$SGSN, $RAT, $VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE, $IMSI, $EVENT_ID])
+	#set($conditionToSelectErrorRAW="and $EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM and $SGSN = :$SGSN and $BSC = :$BSC and $RAT = :$RAT and $VENDOR = :$VENDOR and $CELL = :$CELL")
+#end
+
+#if(${drilltype} == $TYPE_CELL)
+	#set($ccscc=true)
+#else
+	#set($ccscc=false)
+#end
+
+#if(${drilltype} == $TYPE_BSC)
+	#set($useRawSuc=true)
+#else
+	#set($useRawSuc=false)
+#end
+
+
+#if(${groupDefinitions})
+	#set($groupDef = $groupDefinitions.get($type))
+    #set($groupTable = $groupDef.getTableName())
+    #set($groupnameColumn = $groupDef.getGroupNameColumn())
+    #set($joinKeys = $groupDef.getGroupKeys())
+    #set($isgroup=true)
+#else
+	#set($isgroup=false)
+#end
+
+#set ($sucviewSGEH="${agg_t_SGEH}_SUC$sucTimerange")
+#set ($sucviewLTE="${agg_t_LTE}_SUC$sucTimerange")
+#set ($useExclusiveTAC="no")
+
+#macro(KPI_RATIO_QUERY_FOR_NON_AGG $networkType $sucTablesToUseInQuery $errTablesToUseInQuery)
+(	select  
+		#if($ccscc)
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("err" [${groupnameColumn}])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("err" $columns)
+			#end
+		#else   
+			#if($isgroup)
+				#GET_NOT_NULL_COLUMN (["suc","err"] [${groupnameColumn}])
+			#else		
+				#GET_NOT_NULL_COLUMN (["suc","err"] $columns)
+			#end
+		#end
+		#if($ccscc)
+		ccref.CAUSE_CODE_DESC ,
+		sccref.SUBCAUSE_CODE_DESC ,
+		#end
+		#if(${drilltype} != $TYPE_APN)
+		ratref.RAT_DESC ,		
+		#end
+		etref.EVENT_ID ,
+		etref.EVENT_ID_DESC ,
+		max(isnull(err.NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+		#if(!$ccscc)
+		max(isnull(suc.NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+		NO_OF_ERRORS + NO_OF_SUCCESSES as OCCURRENCES,
+		#CALCULATE_KPI_RATIO("etref" "err" "suc"),
+		#end
+		max(isnull(err.NO_OF_TOTAL_ERR_SUBSCRIBERS,0)) as  NO_OF_TOTAL_ERR_SUBSCRIBERS
+		
+	from
+		(select  
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("temp_err" $columns)
+			#end
+			temp_err.EVENT_ID,        
+			count(*),
+			count(distinct(IMSI))
+		from
+			#if($isgroup)
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION($errTablesToUseInQuery "temp_err")
+				,$groupTable temp_group
+			#else
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_TAC_EXCLUSION_SPECIFY_COLUMNS_CONDITIONED($errTablesToUseInQuery "temp_err" $columnsToSelectErrorRAW $conditionToSelectErrorRAW $useExclusiveTAC "")
+			#end
+		#if($isgroup)
+		where
+			temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			and #GET_JOIN("temp_err" "temp_group" $joinKeys)
+		#end
+		group by
+			temp_err.EVENT_ID,
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING ("temp_group" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING ("temp_err" $columns)
+			#end     
+		) as err (
+			#if($isgroup)
+				#GET_COLUMNS ([$groupnameColumn])
+			#else		
+				#GET_COLUMNS ($columns)
+			#end
+			EVENT_ID, 
+			NO_OF_ERRORS, 
+			NO_OF_TOTAL_ERR_SUBSCRIBERS)
+			
+    #if(!$ccscc)
+		full outer join
+		
+		(select
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE ("temp_suc" $columns)
+			#end      
+			temp_suc.EVENT_ID,
+			#if($useRawSuc)
+			count(*)
+			#else
+			sum(NO_OF_SUCCESSES)
+			#end
+		from
+			#if($useRawSuc)
+				#if($networkType == $ApplicationConstants.LTE)
+    				$techPackTablesLTE.getSucTables() temp_suc
+    			#elseif($networkType == $ApplicationConstants.SGEH)
+    				$techPackTablesSGEH.getSucTables() temp_suc
+				#end
+			#else
+    			#if($networkType == $ApplicationConstants.LTE)
+    				dc.$sucviewLTE temp_suc
+    			#elseif($networkType == $ApplicationConstants.SGEH)
+    				dc.$sucviewSGEH temp_suc
+				#end
+			#end
+			#if($isgroup)
+				,$groupTable temp_group
+			#end
+		where
+			#GET_DATETIME_RANGE()
+			$conditionToSelectErrorRAW
+			#if($isgroup)
+				and temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				and #GET_JOIN("temp_suc" "temp_group" $joinKeys)
+			#end
+		group by
+			temp_suc.EVENT_ID,
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING ("temp_group" [$groupnameColumn])
+			#else
+				#GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING ("temp_suc" $columns)
+			#end         
+		) as suc (      
+            #if($isgroup)
+    			#GET_COLUMNS ([$groupnameColumn])
+    		#else
+    			#GET_COLUMNS ($columns)
+    		#end
+            EVENT_ID, 
+    		NO_OF_SUCCESSES 
+		)
+			
+		on (
+			#if($isgroup)
+				#GET_JOIN("suc" "err" [$groupnameColumn])
+			#else		
+				#GET_JOIN("suc" "err" $columns)
+			#end
+			and #GET_JOIN("suc" "err" ["EVENT_ID"])        
+		) 
+	#end
+	,DIM_E_${networkType}_EVENTTYPE etref
+	#if(${drilltype} != $TYPE_APN)
+	,DIM_E_SGEH_RAT ratref
+	#end
+		
+    #if($ccscc)
+	,dc.DIM_E_SGEH_CAUSECODE ccref
+	,dc.DIM_E_SGEH_SUBCAUSECODE sccref
+	where
+		err.EVENT_ID = etref.EVENT_ID
+		and err.CAUSE_CODE = ccref.CAUSE_CODE
+		and err.SUBCAUSE_CODE = sccref.SUBCAUSE_CODE
+		#if(${drilltype} != $TYPE_APN)
+		and err.RAT = ratref.RAT
+		#end
+    #else
+	where
+		isnull(suc.EVENT_ID, err.EVENT_ID) = etref.EVENT_ID
+		#if(${drilltype} != $TYPE_APN)
+			and isnull(suc.RAT, err.RAT) = ratref.RAT
+		#end
+    #end
+	group by    
+		#if($ccscc)
+			#if($isgroup)
+				#GET_COLUMNS_BY_TABLE ("err" [$groupnameColumn])
+			#else		
+				#GET_COLUMNS_BY_TABLE ("err" $columns)
+			#end
+		ccref.CAUSE_CODE_DESC,
+		sccref.SUBCAUSE_CODE_DESC,
+		#else
+			#if($isgroup)
+				#GET_COLUMNS ([$groupnameColumn])
+			#else		
+				#GET_COLUMNS ( $columns)
+			#end
+		#end
+		#if(${drilltype} != $TYPE_APN)
+			ratref.RAT_DESC,
+		#end	
+		etref.EVENT_ID,
+		etref.EVENT_ID_DESC
+	having
+		etref.EVENT_ID between 0 and 255
+		##EVENT_ID is a tinyint in database
+	
+)
+#end
+
+select * 
+from (
+	#KPI_RATIO_QUERY_FOR_NON_AGG($ApplicationConstants.SGEH $sucviewSGEH $techPackTablesSGEH.getErrTables())
+	#if($techPackTablesLTE.getErrTables().size() > 0)
+		union all
+	#KPI_RATIO_QUERY_FOR_NON_AGG($ApplicationConstants.LTE $sucviewLTE $techPackTablesLTE.getErrTables())
+	#end
+	) as KPI_RATIO_RESULT
+order by
+#if($ccscc)
+NO_OF_ERRORS
+#else
+KPI
+#end

@@ -1,0 +1,116 @@
+##
+## Subsession Business Intelligence - Busy day summary analysis
+##
+## Description: 
+##
+##     Summary data for busy day events.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range, tzOffset
+##
+## Author : eavidat 
+## Date   : Nov 2010
+
+#DEFINE_CONSTANTS()
+
+#if(${groupDefinitions})
+    #set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+    #set($groupTable = $groupDef.getTableName())
+    #set($groupnameColumn = $groupDef.getGroupNameColumn())
+    #set($joinKeys = $groupDef.getGroupKeys())
+    #set($isgroup=true)
+#else
+    #set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+    #set($ismsisdn=true)
+    #set($joinKeys=["IMSI"])
+#end
+
+## resetting $RAW_ERR_TABLES & $SUC_ERR_TABLES to include 4G tables
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+
+#foreach($rawSucTable in $RAW_SUC_TABLES)
+    #if($isgroup)
+        #if($velocityCount == 1)
+        BEGIN
+        DECLARE LOCAL TEMPORARY TABLE tmp_total (DATETIME_ID timestamp, SUC unsigned bigint NULL, ERR unsigned bigint NULL);
+        DECLARE LOCAL TEMPORARY TABLE imsi_grp (IMSI unsigned bigint NULL);
+        INSERT INTO imsi_grp(IMSI) select IMSI from dc.$groupTable groupref where $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM;
+        #end
+    insert into tmp_total select DATETIME_ID, count(*) as SUC, 0 as ERR
+    #else
+        #if($velocityCount == 1)
+        select DATETIME_ID, 1 as SUC, 0 as ERR into #tmp_total
+        #else
+        insert into #tmp_total select DATETIME_ID, 1 as SUC, 0 as ERR
+        #end
+    #end
+from dc.$rawSucTable suc
+    #if($isgroup)
+    ,imsi_grp
+    #elseif($ismsisdn)
+    ,dc.DIM_E_IMSI_MSISDN msisdnMap
+    #end
+where
+    #if($isgroup)
+        #GET_JOIN("suc" "imsi_grp" $joinKeys)
+    group by DATETIME_ID;
+    #elseif($ismsisdn)
+        #GET_JOIN("suc" "msisdnMap" $joinKeys)
+    and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+    #else
+    IMSI = :IMSI
+    #end
+#end
+
+#foreach($rawErrTable in $RAW_ERR_TABLES)
+    #if($isgroup)
+    insert into tmp_total select DATETIME_ID, 0 as SUC, count(*) as ERR from dc.$rawErrTable err
+    #else
+    insert into #tmp_total select DATETIME_ID, 0 as SUC, 1 as ERR from dc.$rawErrTable err
+    #end
+    #if($isgroup)
+    ,imsi_grp
+    #elseif($ismsisdn)
+    ,dc.DIM_E_IMSI_MSISDN msisdnMap
+    #end
+where
+    #if($isgroup)
+        #GET_JOIN("err" "imsi_grp" $joinKeys)
+    group by DATETIME_ID;
+    #elseif($ismsisdn)
+        #GET_JOIN("err" "msisdnMap" $joinKeys)
+    and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+    #else
+    IMSI = :IMSI
+    #end
+#end
+
+select
+sum(ERR) as NO_OF_FAILURES_PER_DAY,
+sum(SUC) as NO_OF_SUCCESSES_PER_DAY,
+dayname(cast (DATEADD(MINUTE, ${tzOffset}, DATETIME_ID) as DATE)) as DAY
+#if($isgroup)
+from tmp_total
+where
+    #GET_DATETIME_RANGE()
+group by
+DAY
+order by
+DAY;
+
+drop table tmp_total;
+END
+#else
+from #tmp_total
+where
+    #GET_DATETIME_RANGE()
+group by
+DAY
+order by
+DAY
+
+drop table #tmp_total
+#end

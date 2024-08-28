@@ -1,0 +1,69 @@
+##
+## Device Analysis - Device group Attach/Activate/Mobility failure analysis drilldown
+## See http://atrclin2.athtem.eei.ericsson.se/wiki/index.php/ENIQ_Events_Services_Design_Rules for the design rules
+## on exclusive TAC handling that apply to this query
+##
+## Description: 
+##
+##     Drilldown by device group 
+##
+## Velocity Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+##
+## EVENT_IDS : event ids to include in query
+##
+## Named PreparedStatement Parameters:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##    :groupColumn - group name
+##
+
+#DEFINE_CONSTANTS()
+
+#macro (SELECT_TAC_ERRORS_WITH_EVENT_ID $groupName $shouldUseAggTables $aggTables $rawTables)
+	#if($shouldUseAggTables)
+		(
+		#foreach ($aggView in $aggTables.getErrTables())
+			select TAC,NO_OF_ERRORS,EVENT_ID,DATETIME_ID from $aggView
+			#if ( $velocityCount < $aggTables.getErrTables().size())
+				union all
+			#end
+		#end
+		) as err,
+	#else	
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_HANDLE_TAC_EXCLUSION_SPECIFY_COLUMNS($groupName $rawTables.getErrTables() "err" ["TAC", "EVENT_ID"]),
+	#end
+#end
+
+select   
+    tacref.TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME,    
+    #if ($useAggregationTables)
+    sum(NO_OF_ERRORS) as NO_OF_ERRORS
+    #else
+    count(*) as NO_OF_ERRORS
+    #end
+from
+	#SELECT_TAC_ERRORS_WITH_EVENT_ID($groupname $useAggregationTables $AGGREGATION_TABLES $RAW_TABLES)	
+    dc.GROUP_TYPE_E_TAC tacgroup,     
+    dc.DIM_E_SGEH_TAC tacref
+where
+	EVENT_ID in $EVENT_IDS		
+	#if($useAggregationTables)
+		#AND_DATETIME_RANGE()
+	#end
+    and err.TAC = tacgroup.TAC
+    and tacgroup.GROUP_NAME = :groupname    
+    and err.TAC *= tacref.TAC
+group by
+    tacref.TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME
+order by
+    NO_OF_ERRORS
+    

@@ -1,0 +1,51 @@
+##=============================================================================
+##
+## Network analysis : Roaming failure events  grouy by event id
+##
+## Description: 
+##
+##        count number of failures roaming event and impacted roaming subscriber
+##
+## NOTE:
+##
+##
+##
+##   @author: ezhelao
+## 
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($lteErrTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_LTE_TPNAME).getRawErrTables())
+#set($sgeErrhTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_SGEH_TPNAME).getRawErrTables())
+
+#set($useLteTables=true)
+#set($isGroup=false)
+
+
+
+#macro(EVENT_ANALYSIS_SUMMARY_DRILL_QUERY_BY_COUNTRY $networkType $tablesToUseInQuery)
+(
+	#EVENT_ANALYSIS_SELECT($isgroup $ApplicationConstants.KEY_TYPE_TOTAL $networkType)
+
+	#EVENT_ANALYSIS_FROM($isgroup $networkType $groupTable)
+	,#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_WITH_TAC_EXCLUSION_ROAMING_MCC($tablesToUseInQuery "rawview" $columns)
+
+	#EVENT_ANALYSIS_WHERE($type $networkType)
+)
+#end
+
+select
+
+    #RAW_EVENT_ANALYSIS_COLUMNS($count $isgroup $ApplicationConstants.KEY_TYPE_TOTAL)
+
+from
+(
+	#EVENT_ANALYSIS_SUMMARY_DRILL_QUERY_BY_COUNTRY ($ApplicationConstants.SGEH $sgeErrhTableList)
+
+#if($lteErrTableList.size() > 0 && $useLteTables)
+		union all
+	#EVENT_ANALYSIS_SUMMARY_DRILL_QUERY_BY_COUNTRY ($ApplicationConstants.LTE $lteErrTableList)
+#end
+
+)
+EVENT_ANALYSIS_RESULT
+order by DATETIME_ID desc

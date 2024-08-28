@@ -1,0 +1,39 @@
+##=============================================================================
+##
+## Ranking
+##
+## Description: 
+## Ranking query that queries err raw table and suc 15min aggregation table for Cell/eCell ranking results
+##  
+## Velocity parameter:
+## count : number of rows returned
+##
+## Named PreparedStatement Parameter:
+## :dateFrom - starting time
+## :dateTo - ending time
+##
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($removeExclusiveTAC="true")
+
+SELECT 
+	#if($count > 0)
+	  top $count
+	#end
+	rank() over (order by NO_OF_ERRORS desc) as RANK,
+	rat_ref.RAT_DESC as RAT_DESC,
+    #GET_COLUMNS_BY_TABLE("temp_result" $columnsForQuery)
+	isnull(NO_OF_ERRORS, 0) as NO_OF_ERRORS,    
+    isnull(NO_OF_SUCCESSES,0) as NO_OF_SUCCESSES
+FROM
+	(
+	#foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+   		#SELECT_DATA_TIERED_RANKING_DATA($columnsForQuery $techPack.getRawErrTables() $techPack.getSucAggregationView()  $removeExclusiveTAC)
+		#if($velocityCount < $TECH_PACK_LIST.getTechPacks().size())
+	union all
+		#end
+	#end
+	) AS temp_result
+	, DIM_E_SGEH_RAT rat_ref
+WHERE 
+	rat_ref.RAT = temp_result.RAT

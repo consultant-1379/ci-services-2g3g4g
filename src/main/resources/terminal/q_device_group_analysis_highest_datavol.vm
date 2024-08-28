@@ -1,0 +1,53 @@
+##
+## Device Analysis - device groups highest data volume view
+##
+## Description: 
+##
+##     Get the nominated or most popular device groups for highest data volume (order by total data vol)
+##
+## Velocity Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for dt/dtpdp part of the query
+## count : number of the topN most popular device groups
+##
+##
+## Scenarios:
+##
+##
+##  Highest datavol group summary
+## 
+##     timerange, count
+##     :dateFrom :dateTo
+##
+
+#DEFINE_CONSTANTS()
+#set($isgroup=true)
+#set($isGroupDrilldown=false)
+#set($tpUnit = 1048576)
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by TOTAL_DATAVOL desc) as RANK,
+    isnull(a.GROUP_NAME, b.GROUP_NAME) as GROUP_NAME,
+	convert(numeric(16,3), SUM(isnull(convert(numeric(16,2), a.DATAVOL_DL), 0)/$tpUnit)) as TOTAL_DATAVOL_DL,
+	convert(numeric(16,3), SUM(isnull(convert(numeric(16,2), a.DATAVOL_UL), 0)/$tpUnit)) as TOTAL_DATAVOL_UL,
+	TOTAL_DATAVOL_DL+TOTAL_DATAVOL_UL as TOTAL_DATAVOL,
+    MAX(isnull(BEARER_COUNT,0))as TOTAL_BEARER_COUNT
+from
+	#SUM_TAC_DATAVOLS($useAggregationTables $DTPUT_AGGREGATION_TABLES $rawDtputTables $isgroup $isGroupDrilldown)as a(GROUP_NAME, DATAVOL_UL,DATAVOL_DL)
+    full outer join	
+	#SUM_TAC_BEARERVOLS($useAggregationTables $DTPUT_AGGREGATION_TABLES $rawDtputTables $isgroup $isGroupDrilldown)as b(GROUP_NAME, BEARER_COUNT)
+    on(
+        a.GROUP_NAME = b.GROUP_NAME
+    )
+	where 
+		GROUP_NAME <> 'EXCLUSIVE_TAC'
+group by
+    GROUP_NAME
+order by
+    RANK
+

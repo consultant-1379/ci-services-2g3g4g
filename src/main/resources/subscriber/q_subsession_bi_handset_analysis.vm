@@ -1,0 +1,129 @@
+##
+## Subsession Business Intelligence - Handset analysis
+##
+## Description: 
+##
+##     Summary data for Handset type within the time period.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range
+##
+## Author : ehaoswa 
+## Date   : Aug 2010
+##
+## Changes:
+## by eavidat on 10/11/10 for updating performance (using RAW tables instead of RAW view)
+
+#DEFINE_CONSTANTS()
+
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+#set($imsiColumn=[$IMSI] )
+
+#set($columnsToSelect=["IMSI","TAC","IMEISV","DATETIME_ID"])
+
+select 
+	IMSI,
+	tacref.MANUFACTURER as Manufacturer,
+	tacref.MARKETING_NAME as Model,
+	DT.TAC,
+	tacref.BAND as Device_Capability,
+	IMEISV,
+	sum(no_of_errors) as NO_OF_FAILURES_PER_HANDSET,
+	sum(no_of_success) as NO_OF_SUCCESSES_PER_HANDSET,
+	NO_OF_SUCCESSES_PER_HANDSET + NO_OF_FAILURES_PER_HANDSET as TOTAL_EVENTS_PER_HANDSET,
+	min(FIRST_SEEN) as FIRST_SEEN,
+	max(LAST_SEEN) as LAST_SEEN
+from
+(
+	select	
+		TAC,
+		err.IMSI,
+		IMEISV,
+		count(*) as no_of_errors,
+		0 as no_of_success,
+		min(DATETIME_ID) as FIRST_SEEN,
+		max(DATETIME_ID) as LAST_SEEN
+	from 
+		#if($isgroup||$ismsisdn)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $columnsToSelect)	
+			#if($isgroup)
+			,$groupTable groupref
+			#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			#end
+			where	
+			#if($isgroup)
+				#GET_JOIN("err" "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+				#GET_JOIN("err" "msisdnMap" $joinKeys)
+				and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $imsiColumn $columnsToSelect)
+		#end
+	group by 
+		TAC,
+		IMEISV,
+		err.IMSI
+	union all
+	select 
+		TAC,
+		suc.IMSI,
+		IMEISV,
+		0 as no_of_errors,
+		count(*) as no_of_success,
+		min(DATETIME_ID) as FIRST_SEEN,
+		max(DATETIME_ID) as LAST_SEEN
+	from 
+		#if($isgroup||$ismsisdn)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $columnsToSelect)	
+			#if($isgroup)
+			,$groupTable groupref
+			#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			#end
+			where		
+			#if($isgroup)
+				#GET_JOIN("suc" "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+				#GET_JOIN("suc" "msisdnMap" $joinKeys)
+				and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $imsiColumn $columnsToSelect)
+		#end
+	group by 
+		TAC,
+		IMEISV,
+		suc.IMSI
+)as DT,
+dc.DIM_E_SGEH_TAC tacref
+where
+   DT.TAC *= tacref.TAC
+group by
+	tacref.MANUFACTURER,
+	tacref.MARKETING_NAME,
+	DT.TAC,
+	tacref.BAND,
+	DT.IMEISV,
+	IMSI
+order by
+   FIRST_SEEN

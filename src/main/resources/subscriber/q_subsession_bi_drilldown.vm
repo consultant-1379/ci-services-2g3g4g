@@ -1,0 +1,125 @@
+##=============================================================================
+##
+## Subsession BI drilldown events data for 2G/3G/4G
+##
+## Author: eavidat
+## Date  : Mar 2011
+##=============================================================================	
+#DEFINE_CONSTANTS()
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+##PTMSI is not valid in 4G network - verified by Vasco (systems)
+#if(${type}==$TYPE_PTMSI)
+	#set($useLteTables=false)
+#end
+
+#if(${drilltype}==$TYPE_APN)
+    #set($columns=[$APN])
+#elseif(${drilltype}==$ApplicationConstants.SUBBI_TERMINAL)
+    #set($columns=[$TAC])
+#elseif(${drilltype}==$TYPE_CELL)
+    #set($columns=[$RAT,$VENDOR,$BSC,$CELL])
+#elseif(${drilltype}==$ApplicationConstants.SUBBI_BUSY_HOUR)
+    #set($columns=[$ApplicationConstants.HOUR_SQL_PARAM])
+#end
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+#macro(RAWVIEW_QUERY_FOR_SUBBI_DRILLDOWN $tablesToUseInQuery)
+	,#REPLACE_RAW_VIEW_WITH_RAW_TABLES($tablesToUseInQuery "rawview")
+#end
+
+#macro(WHERE_ADDON_FOR_SUBBI_DRILLDOWN)
+		#if($isgroup||$ismsisdn)
+			#if($isgroup)
+				and #GET_JOIN("rawview" "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+				and #GET_JOIN("rawview" "imsiMap" $joinKeys)
+				and imsiMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+	#else
+		#if(${type}== $TYPE_IMSI)
+			and rawview.IMSI = :$IMSI
+		#elseif(${type}==$TYPE_PTMSI)
+			and rawview.PTMSI = :$PTMSI
+		#end
+	#end
+	#if(${drilltype}==$ApplicationConstants.SUBBI_BUSY_DAY)
+		and dayname(rawview.DATE_ID) = :$ApplicationConstants.DAY_PARAM
+	#elseif(${drilltype}==$ApplicationConstants.SUBBI_FAILURE)
+		and	rawview.EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM
+	#elseif(${drilltype}==$ApplicationConstants.SUBBI_TAU)
+		and rawview.TAC = :$TAC
+		and	rawview.EVENT_ID = 8	##EVENT_ID = 8 is L_TAU. See DIM_E_LTE_EVENTTYPE
+		and rawview.EVENT_SUBTYPE_ID = subtyperef.EVENT_SUBTYPE_ID
+		and rawview.EVENT_ID = subtyperef.EVENT_ID 
+		and rawview.EVENT_SUBTYPE_ID in 
+			( select subtyperef_2.EVENT_SUBTYPE_ID 
+			  from   dc.DIM_E_LTE_EVENT_SUBTYPE subtyperef_2
+			  where  subtyperef_2.EVENT_SUBTYPE_ID_DESC = :$ApplicationConstants.EVENT_TYPE_PARAM)
+	#elseif(${drilltype}==$ApplicationConstants.SUBBI_HANDOVER)
+		and	rawview.EVENT_ID = 7	##EVENT_ID = 7 is L_HANDOVER. See DIM_E_LTE_EVENTTYPE
+		and rawview.VENDOR = :$VENDOR
+		and rawview.HIERARCHY_1 = :$CELL
+	#else
+		and #GET_COLUMNS_WHERE_BY_TABLE("rawview" $columns)
+	#end
+#end
+
+#macro(SUBI_DRILLDOWN_QUERY $networkType  $tablesToUseInQuery)
+(	
+	##bit of a hack here to get the EVENT_ANALYSIS_SELECT macro to select both the IMSI
+	##and PTMSI columns
+	##see the javadoc on the EVENT_ANALYSIS_SELECT macro - the first parameter to this method should 
+	##be true if the query is for a group - we're deliberately ignoring that here to manipulate the results
+	##of the query.  The same goes for the second argument (IMSI/PTMSI)
+	##This logic needs to be pulled up into the java layer
+	#EVENT_ANALYSIS_SELECT(true "IMSI" $networkType)
+	
+	#EVENT_ANALYSIS_FROM($isgroup $networkType $groupTable)
+	#RAWVIEW_QUERY_FOR_SUBBI_DRILLDOWN($tablesToUseInQuery)	
+	
+	#EVENT_ANALYSIS_WHERE($type $networkType)
+	#WHERE_ADDON_FOR_SUBBI_DRILLDOWN()
+)
+#end
+
+select 
+##bit of a hack here again, see comment above
+#RAW_EVENT_ANALYSIS_COLUMNS($count true "IMSI") 
+ from (
+ 
+#if(${type}==$TYPE_PTMSI)
+	#SUBI_DRILLDOWN_QUERY( $ApplicationConstants.SGEH $rawNonLteTables)
+	
+#elseif(${drilltype}==$ApplicationConstants.SUBBI_TAU  || ${drilltype}==$ApplicationConstants.SUBBI_HANDOVER)
+	#SUBI_DRILLDOWN_QUERY ($ApplicationConstants.LTE $rawLteTables)
+	
+#else	
+	#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+		#SUBI_DRILLDOWN_QUERY( $ApplicationConstants.SGEH $rawNonLteTables)
+	#end
+	#if($rawLteTables.size() > 0 && $useLteTables)
+		#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+			union all
+		#end
+		#SUBI_DRILLDOWN_QUERY ($ApplicationConstants.LTE $rawLteTables)	
+	#end
+#end
+)
+SUBBI_DRILLDOWN_RESULT order by DATETIME_ID desc

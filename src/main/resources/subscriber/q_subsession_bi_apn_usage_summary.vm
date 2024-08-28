@@ -1,0 +1,99 @@
+##
+## Subsession Business Intelligence - APN usage summary analysis
+##
+## Description: 
+##
+##     Summary data for each APN the user was using within the time period.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range
+##
+## Author : ehaoswa 
+
+#DEFINE_CONSTANTS()
+
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+#set($columnsToSelect=["APN","EVENT_ID","IMSI"])
+## per evaskol 20/4/11:
+## 2/3G: EVENT_ID should be either ACTIVATE (1) or DEACTIVATE (4)
+## in LTE, EVENT_ID should be either L_PDN_CONNECT (11) or L_PDN_DISCONNECT (12) 
+#set($eventIdsToBeIncluded="(1,4,5,9,10,11,12)")
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+select 
+	#if($count > 0)
+	  top $count
+	#end
+	sum(no_of_errors) as NO_OF_ERRORS_PER_APN,
+	sum(no_of_successes) as NO_OF_SUCCESSES_PER_APN,
+	APN
+from
+(
+	select	
+		APN,
+		count(*) as no_of_errors,
+		0 as no_of_successes
+	from 
+		 #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $columnsToSelect)
+		 #if($isgroup)
+			,$groupTable groupref
+		 #elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+		 #end	
+	where
+		#if($isgroup)
+			#GET_JOIN("err" "groupref" $joinKeys)
+			and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		#elseif($ismsisdn)
+			#GET_JOIN("err" "msisdnMap" $joinKeys)
+			and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+		#else
+		IMSI = :IMSI
+		#end		
+		and EVENT_ID in $eventIdsToBeIncluded
+	group by 
+		err.APN
+	union all
+	select 
+		APN,
+		0 as no_of_errors,
+		count(*) as no_of_successes
+	from 
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $columnsToSelect)
+		#if($isgroup)
+			,$groupTable groupref
+		#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+		#end
+	where 
+		#if($isgroup)
+			#GET_JOIN("suc" "groupref" $joinKeys)
+			and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		#elseif($ismsisdn)
+			#GET_JOIN("suc" "msisdnMap" $joinKeys)
+			and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+		#else
+		IMSI = :IMSI
+		#end
+		and EVENT_ID in $eventIdsToBeIncluded
+	group by 
+		suc.APN
+)  DT_EVENT_E_RAW
+group by 
+DT_EVENT_E_RAW.APN 
+order by 
+NO_OF_ERRORS_PER_APN desc

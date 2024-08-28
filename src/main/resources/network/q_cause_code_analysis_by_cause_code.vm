@@ -1,0 +1,228 @@
+##
+## Ranking - Causecode drilldown
+##
+## Description: 
+##
+##     Drilldown from Causecode rankings. Breakdown into subcause code 
+##
+## Velocity Parameter: 
+##
+## No velocity parametsr are needed, timerange is not relevant as going straight to RAW since
+## node(type) is not relevant
+##  
+##     TR_1 : query against raw events   
+##     TR_2 : query against 1min agg
+##     TR_3 : query against 15min agg
+##     TR_4 : query against daily agg
+##
+## Named PreparedStatement Parameter:
+##
+##     :dateFrom   starting time
+##     :dateTo     ending time
+##     :CAUSE_CODE nomindated cause code ID
+## 
+## Author : exuexie 24/06/2010
+##        : etomcor 30/06/2010 rewritten
+## Changed by ehaoswa 28/07/2010
+## Changed by eriwals 07/04/2011 for 4G tables
+
+
+#DEFINE_CONSTANTS()
+
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#set($subscriberCountCols=[$CAUSE_PROT_TYPE,$CAUSE_CODE,$SUBCAUSE_CODE,$IMSI])
+
+#set($errTables=$techPackTables.getErrTables())
+#set($cptRefForSgeh="dc.DIM_E_SGEH_CAUSE_PROT_TYPE")
+#set($cptRefForLte="dc.DIM_E_LTE_CAUSE_PROT_TYPE")
+#set($ccRefForSgeh="dc.DIM_E_SGEH_CAUSECODE")
+#set($ccRefForLte="dc.DIM_E_LTE_CAUSECODE")
+#set($sccRefForSgeh="dc.DIM_E_SGEH_SUBCAUSECODE")
+#set($sccRefForLte="dc.DIM_E_LTE_SUBCAUSECODE")
+
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+##-----------------------------------------------------------------------------
+## template body
+##
+##-----------------------------------------------------------------------------
+
+#macro(RCCDD_SINGLE_AGG_SUB_QUERY $columnsToInclude $rawview $tableToUseInQuery)
+		
+			select	#GET_COLUMNS_NO_COMMA_TRAILING($columnsToInclude)
+			from
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($tableToUseInQuery $rawview $columnsToInclude)
+	
+#end
+
+#macro(RCCDD_SINGLE_AGG_QUERY $errTable $cptTable $ccTable $sccTable $isLte)
+(select errAdvice.CAUSE_PROT_TYPE, errAdvice.CAUSE_PROT_TYPE_DESC, errAdvice.CAUSE_CODE, errAdvice.CAUSE_CODE_DESC, errAdvice.SUBCAUSE_CODE, errAdvice.SUBCAUSE_CODE_DESC,
+errAdvice.NO_OF_ERRORS, errAdvice.SUBCAUSE_CODE_HELP as ADVICE from (
+select	cptref.CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, CAUSE_CODE_DESC, sccref.SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, sum(NO_OF_ERRORS)
+	from
+		dc.$errTable errRef,
+		$ccTable ccref,
+		$sccTable sccref,
+		$cptTable cptref
+	where
+		errRef.CAUSE_CODE = :CAUSE_CODE
+		#AND_DATETIME_RANGE()
+		and cptref.CAUSE_PROT_TYPE = errRef.CAUSE_PROT_TYPE
+		and ccref.CAUSE_CODE = errRef.CAUSE_CODE
+		and sccref.SUBCAUSE_CODE = errRef.SUBCAUSE_CODE
+		and ccref.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+	group by
+        ccref.CAUSE_CODE,
+		CAUSE_CODE_DESC,
+		sccref.SUBCAUSE_CODE,
+		SUBCAUSE_CODE_DESC,
+		SUBCAUSE_CODE_HELP,
+		cptref.CAUSE_PROT_TYPE,
+		CAUSE_PROT_TYPE_DESC
+        )
+        as errAdvice(CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, NO_OF_ERRORS)
+	)
+#end
+
+#macro(RCCDD_NONAGG_QUERY $errTable $cptTable $ccTable $sccTable $isLte)
+(select errAdvice.CAUSE_PROT_TYPE, errAdvice.CAUSE_PROT_TYPE_DESC, errAdvice.CAUSE_CODE, errAdvice.CAUSE_CODE_DESC, errAdvice.SUBCAUSE_CODE, errAdvice.SUBCAUSE_CODE_DESC,
+errAdvice.NO_OF_ERRORS, errAdvice.NO_OF_TOTAL_ERR_SUBSCRIBERS, errAdvice.SUBCAUSE_CODE_HELP as ADVICE from (
+select	cptref.CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, CAUSE_CODE_DESC, sccref.SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, count(*), count(distinct(IMSI))
+	from
+		dc.$errTable errRef,
+		$ccTable ccref,
+		$sccTable sccref,
+		$cptTable cptref
+	where
+		errRef.CAUSE_CODE = :$CAUSE_CODE
+		#AND_DATETIME_RANGE()
+		and #GET_TAC_EXCLUSION()
+		and cptref.CAUSE_PROT_TYPE = errRef.CAUSE_PROT_TYPE
+		and ccref.CAUSE_CODE = errRef.CAUSE_CODE
+		and sccref.SUBCAUSE_CODE = errRef.SUBCAUSE_CODE
+		and ccref.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+	group by
+        ccref.CAUSE_CODE,
+        CAUSE_CODE_DESC,
+        sccref.SUBCAUSE_CODE,
+        SUBCAUSE_CODE_DESC,
+        SUBCAUSE_CODE_HELP,
+        cptref.CAUSE_PROT_TYPE,
+        CAUSE_PROT_TYPE_DESC
+	)
+    as errAdvice(CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, SUBCAUSE_CODE_HELP, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS)
+	)
+#end
+
+#if($useAggregationTables)
+select
+	CAUSE_PROT_TYPE as CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC as CAUSE_PROT_TYPE_DESC,
+    err.CAUSE_CODE as CAUSE_CODE,
+    CAUSE_CODE_DESC as CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE as SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC as SUBCAUSE_CODE_DESC,
+	err.ADVICE as whatnext,
+	sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+	(select
+        count(distinct(IMSI))
+    from (
+	
+	#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+		(
+			#RCCDD_SINGLE_AGG_SUB_QUERY($subscriberCountCols "rawNonLteView" $rawNonLteTables)
+		)
+	#end
+	#if($rawLteTables.size() > 0 && $useLteTables)
+		
+		#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+			union all
+		#end
+		(
+		#RCCDD_SINGLE_AGG_SUB_QUERY($subscriberCountCols "rawLteView" $rawLteTables)	
+		)
+	#end
+	)
+	as sub where sub.CAUSE_PROT_TYPE = err.CAUSE_PROT_TYPE and sub.CAUSE_CODE = err.CAUSE_CODE and sub.SUBCAUSE_CODE = err.SUBCAUSE_CODE 
+	) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from (
+
+	#foreach ($errtable in $errTables)
+	
+		#if (($errtable.toString().indexOf($ApplicationConstants.SGEH) > -1) && $useNonLteTables)
+			#RCCDD_SINGLE_AGG_QUERY($errtable $cptRefForSgeh $ccRefForSgeh $sccRefForSgeh false)
+		#elseif ($useLteTables)
+			#RCCDD_SINGLE_AGG_QUERY($errtable $cptRefForLte $ccRefForLte $sccRefForLte true)
+		#end
+	
+		#if($velocityCount < $errTables.size())
+			union all
+		#end
+	
+	#end
+) as err (CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, NO_OF_ERRORS, ADVICE)
+		
+group by
+    CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC
+order by
+    CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC
+
+#else
+
+select
+	CAUSE_PROT_TYPE as CAUSE_PROT_TYPE,
+	CAUSE_PROT_TYPE_DESC as CAUSE_PROT_TYPE_DESC,
+    err.CAUSE_CODE as CAUSE_CODE,
+    CAUSE_CODE_DESC as CAUSE_CODE_DESC,
+    err.SUBCAUSE_CODE as SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC as SUBCAUSE_CODE_DESC,
+	err.advice as whatnext,
+	sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    sum(isnull(NO_OF_TOTAL_ERR_SUBSCRIBERS, 0)) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from (
+
+	#foreach ($rawtable in $rawAllErrTables)
+	
+		#if (($rawtable.toString().indexOf($ApplicationConstants.SGEH) > -1) && $useNonLteTables)
+			#RCCDD_NONAGG_QUERY($rawtable $cptRefForSgeh $ccRefForSgeh $sccRefForSgeh false)
+		#elseif ($useLteTables)
+			#RCCDD_NONAGG_QUERY($rawtable $cptRefForLte $ccRefForLte $sccRefForLte true)
+		#end
+	
+		#if($velocityCount < $rawAllErrTables.size())
+			union all
+		#end
+	
+	#end
+) as err (CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS, ADVICE)
+		
+group by
+    CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC
+order by
+    CAUSE_CODE,
+    CAUSE_CODE_DESC,
+    SUBCAUSE_CODE,
+    SUBCAUSE_CODE_DESC,
+    whatnext,
+    CAUSE_PROT_TYPE,
+    CAUSE_PROT_TYPE_DESC
+#end

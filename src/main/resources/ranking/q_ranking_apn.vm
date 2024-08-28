@@ -1,0 +1,126 @@
+##=============================================================================
+##
+## Ranking
+##
+## Description: 
+## Ranking query that queries either aggregation or raw tables for APN ranking results
+##  
+## Velocity parameter:
+##  
+## count : number of rows returned
+##
+## ## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##
+##=============================================================================
+
+
+##-----------------------------------------------------------------------------
+## select apn ranking data from one tech pack 
+##
+## errTables: the aggregation error view OR the raw error tables
+## sucTables: the aggregation success view OR the raw success tables
+##-----------------------------------------------------------------------------
+
+#macro(SELECT_APN_RANKING_DATA_FROM_EACH_TECH_PACK )
+(
+select
+	APN,
+    #if($useAggregationTables)
+    sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS
+    #else
+    count(*) as NO_OF_ERRORS
+    #end
+from
+    (
+    #foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+        #set($rawErrTables=$techPack.getRawErrTables())
+		#set($errAggView=$techPack.getErrAggregationView())
+	    #set($dimApnTable=$techPack.getStaticLookupTechpack())
+		
+		## We will only add the "union all" if there is error rawtables in this tech pack
+		#if($velocityCount > 1)
+			#if($techPack.getRawErrTables().size() > 0)
+				union all
+			#end
+		#end
+	    #if($useAggregationTables)
+            select 
+				APN, 
+				NO_OF_ERRORS 
+			from $errAggView 
+			where 
+				#GET_DATETIME_RANGE()
+                and APN in #GET_APN_LAST_SEEN( "${dimApnTable}_APN" )
+	    #else			
+		    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_APN_IN_DIM_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($rawErrTables "err" $columns "${dimApnTable}_APN")
+	    #end
+	#end
+	) as temp_err
+group by
+	APN
+) as err (APN, NO_OF_ERRORS)
+
+FULL OUTER JOIN
+
+(select
+    APN,
+    #if($useAggregationTables)
+    sum(NO_OF_SUCCESSES)
+    #else
+    count(*)
+    #end
+from
+        (
+        #foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+            #set($rawSucTables=$techPack.getRawSucTables())
+			#set($sucAggView=$techPack.getSucAggregationView())
+	        #set($dimApnTable=$techPack.getStaticLookupTechpack())
+			
+			## We will only add the "union all" if there is success rawtables in this tech pack
+			#if($velocityCount > 1)
+				#if($techPack.getRawSucTables().size() > 0)
+					union all
+				#end
+			#end
+		    #if($useAggregationTables)
+                select 
+					APN, 
+					NO_OF_SUCCESSES 
+				from $sucAggView 
+				where 
+					#GET_DATETIME_RANGE()
+                    and APN in #GET_APN_LAST_SEEN( "${dimApnTable}_APN" )
+		    #else
+                #REPLACE_RAW_VIEW_WITH_RAW_TABLES_APN_IN_DIM_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($rawSucTables "suc" $columns "${dimApnTable}_APN" )
+            #end
+		#end
+		) as temp_suc
+group by
+    APN
+) as suc( APN, NO_OF_SUCCESSES )
+ON(
+    err.APN  = suc.APN
+)
+#end
+
+#DEFINE_CONSTANTS()
+#set($columns=["APN"])
+#set($useAggregationTables=$TECH_PACK_LIST.shouldQueryUseAggregationTables())
+
+select 
+	#if($count > 0)
+	  top $count
+	#end
+	rank() over (order by NO_OF_ERRORS desc) as RANK,	
+    isnull(err.apn, suc.apn) as APN,
+	max(isnull(err.NO_OF_ERRORS, 0)) as NO_OF_ERRORS,    
+    max(isnull(suc.NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES
+from
+	#SELECT_APN_RANKING_DATA_FROM_EACH_TECH_PACK()
+group by
+APN
+order by
+  RANK 

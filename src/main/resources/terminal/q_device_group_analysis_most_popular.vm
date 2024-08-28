@@ -1,0 +1,117 @@
+##
+## Device Analysis - Most popular device groups
+##
+## Description: 
+##
+##     Get the most popular device groups based on the total events
+##
+##  See http://atrclin2.athtem.eei.ericsson.se/wiki/index.php/ENIQ_Events_Services_Design_Rules for the design rules
+## on exclusive TAC handling that apply to this query
+##
+## Velocity Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for error/success part of the query##
+## count : number of the top<> most popular device types/device groups
+##
+## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##
+
+#macro (CALCULATE_SUM_FOR_GROUPS_IN_AGGREGATION_VIEW $view $columnToSum)
+	select        
+        GROUP_NAME,
+        sum($columnToSum)       
+    from 	    
+		$view temp			
+        ,dc.GROUP_TYPE_E_TAC tacgroup
+    where    
+        temp.TAC = tacgroup.TAC		
+		and #GET_DATETIME_RANGE_BY_TABLE("temp")		
+    group by
+        GROUP_NAME
+#end	
+
+#DEFINE_CONSTANTS()
+#set($columnsToSelectFromRawTables=["TAC"])
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_EVENTS desc) as RANK,    
+    isnull(total.GROUP_NAME, subscribers.GROUP_NAME) as GROUP_NAME,    
+    sum(isnull(NO_OF_EVENTS, 0)) as NO_OF_EVENTS,
+    isnull(max(subscribers.NO_OF_TOTAL_ERR_SUBSCRIBERS),0) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from
+    (
+	#if($useAggregationTables)		
+		#foreach ($aggView in $AGGREGATION_TABLES.getErrTables())
+			#CALCULATE_SUM_FOR_GROUPS_IN_AGGREGATION_VIEW($aggView "NO_OF_ERRORS")
+			#if ( $velocityCount < $AGGREGATION_TABLES.getErrTables().size())
+				union all
+			#end
+		#end
+	union all
+		#SUM_ERRORS_FOR_EXCLUSIVE_TAC_GROUP($RAW_TABLES)		
+	#else
+	select        
+        GROUP_NAME,
+        count(*)        
+    from 	    
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($RAW_TABLES.getErrTables() "err" $columnsToSelectFromRawTables)	
+        ,dc.GROUP_TYPE_E_TAC tacgroup
+    where    
+        err.TAC = tacgroup.TAC
+    group by
+        GROUP_NAME
+	union all
+		#SUM_ERRORS_FOR_EXCLUSIVE_TAC_GROUP($RAW_TABLES)
+	#end
+    union all
+	#if($useAggregationTables)		
+		#foreach ($aggView in $AGGREGATION_TABLES.getSucTables())
+			#CALCULATE_SUM_FOR_GROUPS_IN_AGGREGATION_VIEW($aggView "NO_OF_SUCCESSES")
+			#if ( $velocityCount < $AGGREGATION_TABLES.getSucTables().size())
+				union all
+			#end
+		#end
+	union all
+		#SUM_SUCCESSES_FOR_EXCLUSIVE_TAC_GROUP($RAW_TABLES)	
+	#else
+    select
+        GROUP_NAME,      
+        count(*)        
+    from 	    
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($RAW_TABLES.getSucTables() "suc" $columnsToSelectFromRawTables)			
+        ,dc.GROUP_TYPE_E_TAC tacgroup
+    where    
+        suc.TAC = tacgroup.TAC
+    group by
+        GROUP_NAME
+	#end
+    ) as total(GROUP_NAME, NO_OF_EVENTS)    
+    full outer join
+    (select
+    	tacgroup.GROUP_NAME,
+    	count(distinct(IMSI))
+    from
+    	#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($RAW_TABLES.getErrTables() "rawview" ["TAC","IMSI"]),
+    	dc.GROUP_TYPE_E_TAC tacgroup 
+    where
+	    tacgroup.TAC = rawview.TAC
+    group by
+		GROUP_NAME
+    )as subscribers(
+    	GROUP_NAME,NO_OF_TOTAL_ERR_SUBSCRIBERS)
+    on(
+		total.GROUP_NAME = subscribers.GROUP_NAME
+    )  
+group by
+    GROUP_NAME
+order by
+    RANK

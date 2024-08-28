@@ -1,0 +1,102 @@
+##=============================================================================
+##
+## IMSI Ranking towards aggregation tables
+##
+## Description:
+##
+##    Provide the top n IMSIs based on failures, whether the subscriber is VIP or not need to be diplayed too
+##
+## Velocity Parameter:
+##  
+## timerange : one of { TR_3, TR_4}
+##  
+##     TR_3 : normally query against 15min agg
+##     TR_4 : normally query against daily agg
+##
+## count: top N IMSI
+## techPackTables: see TechPackTables POJO
+##
+## Named PreparedStatement Parameter:
+##
+##    :dateFrom   starting time
+##    :dateTo     ending time
+##
+##=============================================================================
+
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#set($columnsToSelectFromRawTables=["IMSI"])
+#DEFINE_CONSTANTS()
+
+begin
+
+declare local temporary table temp_imsi_ranking_table
+(
+rank int NULL,
+imsi unsigned bigint,
+no_of_errors int NULL
+);
+
+insert into temp_imsi_ranking_table (
+select
+#if($count > 0)
+top $count
+#end
+rank() over (order by NO_OF_ERRORS desc) as RANK,
+IMSI,
+sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS
+from
+(
+#foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+select IMSI,NO_OF_ERRORS from dc.${techPack.getName()}_IMSI_RANK$time
+where
+    #GET_DATETIME_RANGE()
+and IMSI <> 0
+    #if($velocityCount < $TECH_PACK_LIST.getTechPacks().size())
+    union all
+    #end
+#end
+) as ranking_tables
+group by
+IMSI
+order by
+NO_OF_ERRORS
+);
+
+#if($csv == true)
+ SET TEMPORARY OPTION Temp_Extract_Name1 = 'csvFileName' ;
+#end
+
+select
+ranks.RANK,
+ranks.IMSI,
+ranks.NO_OF_ERRORS,
+isnull(NO_OF_SUCCESSES, 0) as NO_OF_SUCCESSES
+from
+temp_imsi_ranking_table ranks
+left outer join
+
+(SELECT IMSI,sum(NO_OF_SUCCESSES) as NO_OF_SUCCESSES from
+(
+    #foreach($table in $TECH_PACK_LIST.getAllRawTablesWithMeasurementType()) ## Using EVENT_E_LTE_IMSI_RAW and EVENT_E_SGEH_IMSI_RAW table instead of view
+         #if ($velocityCount>1)
+             union all
+        #end
+        (SELECT IMSI,sum(NO_OF_SUCCESSES) as NO_OF_SUCCESSES from dc.$table WHERE #GET_DATETIME_RANGE()
+            group by IMSI)
+    #end
+    ) as all_suc
+group by
+    IMSI
+) as suc(
+    IMSI,
+    NO_OF_SUCCESSES
+ )
+on(
+ranks.IMSI = suc.IMSI
+)
+order by
+ranks.RANK;
+
+drop table temp_imsi_ranking_table;
+
+end

@@ -1,0 +1,165 @@
+##
+## Subsession Business Intelligence - Failed event analysis
+##
+## Description: 
+##
+##     Summary data for failed events within the time period.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range
+##
+## Author : ehaoswa 
+## Date   : Aug 2010
+
+#DEFINE_CONSTANTS()
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+#set($columnsToSelect=["EVENT_ID","IMSI"])
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_IMSI)
+    #set($columns=[$IMSI])
+#elseif(${type}==$TYPE_PTMSI)
+	#set($columns=[$PTMSI])
+#elseif(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+## Temporary table to hold all event type descriptions
+select * into #EVENT_TYPE_TABLE from dc.DIM_E_SGEH_EVENTTYPE 
+insert into #EVENT_TYPE_TABLE select * from dc.DIM_E_LTE_EVENTTYPE
+
+#if($isgroup||$ismsisdn)
+    select 
+    	sum(no_of_failures) as No_Of_Failures_Per_Event,
+    	sum(no_of_success) as No_Of_Successes_Per_Event,
+    	#EVENT_TYPE_TABLE.EVENT_ID_DESC || ',' || EVENT_ID_RESULTS_TABLE.EVENT_ID as Event_Name
+    from
+    (
+    	select	
+    		EVENT_ID,
+    		count(*) as no_of_failures,
+    		0 as no_of_success
+    	from 
+    		 #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $columnsToSelect)
+			 #if($isgroup)
+    		 ,$groupTable groupref
+			 #elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			 #end
+    	where
+			#if($isgroup)
+    		#GET_JOIN("err" "groupref" $joinKeys)
+    		and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+			#GET_JOIN("err" "msisdnMap" $joinKeys)
+			and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+    	group by 
+    		EVENT_ID
+    	union all
+    	select 
+    		EVENT_ID,
+    		0 as no_of_failures,
+    		count(*) as no_of_success
+    	from 
+    		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $columnsToSelect)
+    		#if($isgroup)
+    		 ,$groupTable groupref
+			 #elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			 #end
+    	where 
+			#if($isgroup)
+    		#GET_JOIN("suc" "groupref" $joinKeys)
+    		and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+			#GET_JOIN("suc" "msisdnMap" $joinKeys)
+			and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+    	group by 
+    		EVENT_ID
+    ) AS EVENT_ID_RESULTS_TABLE,
+    #EVENT_TYPE_TABLE
+    where
+    	EVENT_ID_RESULTS_TABLE.EVENT_ID = #EVENT_TYPE_TABLE.EVENT_ID
+    group by
+        EVENT_ID_RESULTS_TABLE.EVENT_ID,
+    	#EVENT_TYPE_TABLE.EVENT_ID_DESC
+	order by
+		Event_Name
+	
+#else
+	#foreach($rawSucTable in $RAW_SUC_TABLES)
+		#if($velocityCount == 1)
+			select 
+				EVENT_ID,
+				DATETIME_ID, 
+				1 as succ, 
+				0 as err 
+			into #tmp_total 
+			from 
+				dc.$rawSucTable suc 
+			where
+				#GET_COLUMNS_WHERE($columns) and
+				DATE_ID >= DATEADD(DAY, -1, :dateFrom) and 
+				DATE_ID < DATEADD(DAY, 1, :dateTo)
+		#else
+			insert into #tmp_total 
+			select 
+				EVENT_ID,
+				DATETIME_ID, 
+				1 as succ, 
+				0 as err
+			from 
+				dc.$rawSucTable suc 
+			where
+				#GET_COLUMNS_WHERE($columns) and
+				DATE_ID >= DATEADD(DAY, -1, :dateFrom) and 
+				DATE_ID < DATEADD(DAY, 1, :dateTo)
+		#end
+	#end
+	
+	#foreach($rawErrTable in $RAW_ERR_TABLES)
+		insert into #tmp_total 
+		select 
+				EVENT_ID,
+				DATETIME_ID, 
+				0 as succ, 
+				1 as err 
+		from 
+			dc.$rawErrTable err
+		where
+			#GET_COLUMNS_WHERE($columns) and
+			DATE_ID >= DATEADD(DAY, -1, :dateFrom) and 
+			DATE_ID < DATEADD(DAY, 1, :dateTo)
+	#end
+			
+select  
+	    sum(err) as NO_OF_FAILURES, 
+		sum(succ) as NO_OF_SUCCESSES,
+		#EVENT_TYPE_TABLE.EVENT_ID_DESC || ',' || EVENT_ID_RESULTS_TABLE.EVENT_ID as Event_Name
+	from 
+		#tmp_total AS EVENT_ID_RESULTS_TABLE, 
+		#EVENT_TYPE_TABLE
+	where 
+		EVENT_ID_RESULTS_TABLE.EVENT_ID = #EVENT_TYPE_TABLE.EVENT_ID and 
+		#GET_DATETIME_RANGE() 
+	group by 
+		Event_Name
+	order by
+		Event_Name
+	
+	drop table #tmp_total	
+#end
+
+drop table #EVENT_TYPE_TABLE

@@ -1,0 +1,68 @@
+##
+## Device Analysis - Attach/Activate/Mobility failure analysis
+##
+## Description: 
+##
+##     Get the total number of errors for attach/activate/rau/israu event types for device types
+##
+## Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for error/success part of the query
+##
+## EVENT_IDS : list of event ids to include in query
+##
+## count : number of device having most mobility/attach/activate failures 
+##
+
+#DEFINE_CONSTANTS()
+
+#macro (SELECT_TAC_ERRORS_WITH_EVENT_ID_AND_APPLY_TAC_EXCLUSION $shouldUseAggTables $aggTables $rawTables)
+	#if($shouldUseAggTables)
+		(
+		#foreach ($aggView in $aggTables.getErrTables())
+			select TAC,NO_OF_ERRORS,EVENT_ID,DATETIME_ID from $aggView
+			#if ( $velocityCount < $aggTables.getErrTables().size())
+				union all
+			#end
+		#end
+		) as err,
+	#else	
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($rawTables.getErrTables() "err" ["TAC", "EVENT_ID"]),
+	#end
+#end
+
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_ERRORS desc) as RANK,
+    err.TAC as TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME,
+    #if($useAggregationTables)
+    sum(NO_OF_ERRORS) as NO_OF_ERRORS,
+    #else
+    count(*) as NO_OF_ERRORS,
+	#end
+	tacref.Band
+from
+	#SELECT_TAC_ERRORS_WITH_EVENT_ID_AND_APPLY_TAC_EXCLUSION($useAggregationTables $AGGREGATION_TABLES $RAW_TABLES)	
+    dc.DIM_E_SGEH_TAC tacref
+where
+   EVENT_ID in $EVENT_IDS
+	#if($useAggregationTables)
+		#AND_DATETIME_RANGE()
+	#end
+    and err.TAC *= tacref.TAC
+group by
+    TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME,
+	tacref.Band
+order by
+    RANK
+    

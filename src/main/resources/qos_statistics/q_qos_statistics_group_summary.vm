@@ -1,0 +1,137 @@
+##=============================================================================
+##
+## QOS group summary query
+## -----------------------------------
+##
+## List summary data by group for each QCI (Quality Class Indicator)
+##
+## Parameters:
+##
+## 
+## type: type of node
+## SUFFIX_FOR_AGGREGATION_TABLE: one of _DAY, _1MIN, _15MIN
+## techPackTables: see javadoc on the TechPackTables object for more on this
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#if($useAggregationTables)
+	#set($errTables=$AGGREGATION_TABLES.getErrTables())
+	#set($sucTables=$AGGREGATION_TABLES.getSucTables())
+#else
+	#set($errTables=$rawtables.getErrTables())
+	#set($sucTables=$rawtables.getSucTables())
+#end	
+begin
+
+declare local temporary table qci_summary
+(  
+	qci_id smallint NULL,
+    qci_description varchar(128) NULL,
+    no_of_errors int NULL,    
+    no_of_successes int NULL,
+	impacted_subscribers int NULL
+);
+
+#foreach($i in [1..10])
+insert into qci_summary (
+select 
+	$i,
+	QCI_ID_DESCRIPTION,		
+	sum(isnull(FAILURES, 0)) as FAILURES,
+	sum(isnull(SUCCESSES, 0)) as SUCCESSES, 
+	sum(isnull(IMPACTED_SUBSCRIBERS,0)) as IMPACTED_SUBSCRIBERS
+	
+from
+	(
+	#foreach($errTable in $errTables)
+	select
+		sum(QCI_ERR_$i) as FAILURES
+	from
+		$errTable as errview
+		,$groupTable as group_table
+	where
+		#GET_DATETIME_RANGE()
+		and #GET_JOIN("errview" "group_table" $joinKeys)
+        and group_table.GROUP_NAME = :$ApplicationConstants.GROUP_NAME_PARAM
+		#if(${groupname}!=$ApplicationConstants.EXCLUSIVE_TAC_GROUP_NAME)
+			#if(!$useAggregationTables)
+		and #GET_TAC_EXCLUSION_BY_TABLE("errview")
+			#end
+		#end
+		 #if ( $velocityCount < $errTables.size())
+		 union all
+		 #end
+	#end
+		) as err(FAILURES),
+	(
+	#foreach($sucTable in $sucTables)
+	select
+		sum(QCI_SUC_$i) as SUCCESSES
+	from	
+		$sucTable as sucview
+		,$groupTable as group_table
+	where		
+		#GET_DATETIME_RANGE()
+		and #GET_JOIN("sucview" "group_table" $joinKeys)
+        and group_table.GROUP_NAME = :$ApplicationConstants.GROUP_NAME_PARAM
+		#if(${groupname}!=$ApplicationConstants.EXCLUSIVE_TAC_GROUP_NAME)
+			#if(!$useAggregationTables)
+		and #GET_TAC_EXCLUSION_BY_TABLE("sucview")
+			#end
+		#end
+		#if ( $velocityCount < $sucTables.size())
+		 union all
+		#end		
+	#end
+		) as suc(SUCCESSES),
+	(
+	#foreach($rawtable in $rawtables.getErrTables())
+	select				
+		count(distinct(IMSI)) 
+	from 
+       	$rawtable as temp_sub 
+		,$groupTable as group_table
+	where
+		#GET_DATETIME_RANGE()			
+		and group_table.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		and #GET_JOIN("temp_sub" "group_table" $joinKeys)	
+		and QCI_ERR_$i <> 0
+		#if(${groupname}!=$ApplicationConstants.EXCLUSIVE_TAC_GROUP_NAME)
+			#if(!$useAggregationTables)
+		and #GET_TAC_EXCLUSION_BY_TABLE("temp_sub")
+			#end
+		#end
+	#if ( $velocityCount < $rawtables.getErrTables().size())
+		 union all
+		#end		
+	#end
+		) as sub(IMPACTED_SUBSCRIBERS),
+	(select 
+			QCI_ID_DESCRIPTION
+			from
+			DIM_E_LTE_QCI
+			where QCI_NUMBER=$i ) as qci_description
+GROUP BY QCI_ID_DESCRIPTION	
+	);
+#end
+
+#if($csv == true)
+ SET TEMPORARY OPTION Temp_Extract_Name1 = 'csvFileName' ;
+#end
+
+select 
+	QCI_ID,
+	QCI_DESCRIPTION, 
+	NO_OF_ERRORS,
+	NO_OF_SUCCESSES, 
+	IMPACTED_SUBSCRIBERS
+from qci_summary;
+
+drop table qci_summary;
+end

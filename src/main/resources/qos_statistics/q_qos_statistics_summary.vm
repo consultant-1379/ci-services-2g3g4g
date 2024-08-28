@@ -1,0 +1,125 @@
+##=============================================================================
+##
+## QOS summary query
+## -----------------------------------
+##
+## List summary data for each QCI (Quality Class Indicator)
+##
+## Parameters:
+##	AGGREGATION_TABLES	aggregation tables to use in query, see the TechPackTables Javadoc for more dteails
+##  rawtables			raw tables to use in query, see the TechPackTables Javadoc for more dteails
+## 	COLUMNS_TO_FILTER_ON
+##	columnsForQuery
+##	type				
+##	COLUMNS_TO_SELECT_FROM_RAW_TABLES_FOR_QOS_ERR_SUMMARY
+##  COLUMNS_TO_SELECT_FROM_RAW_TABLES_FOR_QOS_SUC_SUMMARY
+##  useAggregationTables boolean indicating whether query should use raw or aggregation tables
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#if($useAggregationTables)
+	#set($errTables=$AGGREGATION_TABLES.getErrTables())
+	#set($sucTables=$AGGREGATION_TABLES.getSucTables())
+#else
+	#set($errTables=$rawtables.getErrTables())
+	#set($sucTables=$rawtables.getSucTables())
+#end		
+
+begin
+
+declare local temporary table qci_summary
+(  
+	qci_id smallint NULL,
+    qci_description varchar(128) NULL,
+    no_of_errors int NULL,    
+    no_of_successes int NULL,
+	impacted_subscribers int NULL
+	
+);
+
+#foreach($i in [1..10])
+insert into qci_summary (
+select 
+	$i,
+	QCI_ID_DESCRIPTION, 
+	sum(isnull(FAILURES, 0)) as FAILURES,
+	sum(isnull(SUCCESSES, 0)) as SUCCESSES, 
+	sum(isnull(IMPACTED_SUBSCRIBERS,0)) as IMPACTED_SUBSCRIBERS
+	
+from 
+	(
+	#foreach($errTable in $errTables)
+	select
+		sum(QCI_ERR_$i) as FAILURES
+	from
+		$errTable
+	where
+		#GET_DATETIME_RANGE()
+		and #GET_COLUMNS_WHERE($COLUMNS_TO_FILTER_ON)
+		#if(!$useAggregationTables)
+			and #GET_TAC_EXCLUSION()
+		#end
+		 #if ( $velocityCount < $errTables.size())
+		 union all
+		 #end
+	#end
+		) as err(FAILURES),
+	(
+	#foreach($sucTable in $sucTables)
+	select
+		sum(QCI_SUC_$i) as SUCCESSES
+	from	
+		$sucTable
+	where
+		#GET_DATETIME_RANGE()
+		and #GET_COLUMNS_WHERE($COLUMNS_TO_FILTER_ON)
+		#if(!$useAggregationTables)
+		and #GET_TAC_EXCLUSION()
+		#end
+ 		#if ( $velocityCount < $sucTables.size())
+		 union all
+		#end		
+	#end
+		) as suc(SUCCESSES),
+	(
+	#foreach($rawtable in $rawtables.getErrTables())
+	select
+		count(distinct(IMSI)) 
+	from
+		$rawtable
+	where
+		#GET_COLUMNS_WHERE($COLUMNS_TO_FILTER_ON)
+		and QCI_ERR_$i <> 0
+		and #GET_DATETIME_RANGE()
+		#if(!$useAggregationTables)
+		and #GET_TAC_EXCLUSION()
+		#end
+	#if ( $velocityCount < $rawtables.getErrTables().size())
+		 union all
+		#end		
+	#end
+		) as sub(IMPACTED_SUBSCRIBERS),
+	(select 
+		QCI_ID_DESCRIPTION
+	from
+		DIM_E_LTE_QCI
+	where QCI_NUMBER=$i ) as qci_description
+	GROUP BY QCI_ID_DESCRIPTION
+	);
+#end
+
+#if($csv == true)
+ SET TEMPORARY OPTION Temp_Extract_Name1 = 'csvFileName' ;
+#end
+
+select 
+	QCI_ID,
+	QCI_DESCRIPTION, 
+	NO_OF_ERRORS,
+	NO_OF_SUCCESSES, 
+	IMPACTED_SUBSCRIBERS 
+from qci_summary;
+
+drop table qci_summary;
+end

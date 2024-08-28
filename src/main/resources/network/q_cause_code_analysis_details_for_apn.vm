@@ -1,0 +1,283 @@
+##=============================================================================
+##
+## Cause code analysis: detailed cause code/sub cause code data
+## ------------------------------------------------------------
+##
+## List sub cause code detail for cause code including description & subscriber
+##
+## type : one of {SGSN, BSC, CELL, APN}
+##
+## NOTE: For subscriber session management, All the TACs will be considered. i.e, no blacklist TACs here          
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+
+#set($columns=[$APN])
+
+
+#if(${groupDefinitions})
+	#set($groupDef = $groupDefinitions.get($groupType))
+	#set($groupTable = $groupDef.getTableName())
+	#set($groupnameColumn = $groupDef.getGroupNameColumn())
+	#set($joinKeys = $groupDef.getGroupKeys())
+#end
+
+#set($cptRefForSgeh="DIM_E_SGEH_CAUSE_PROT_TYPE")
+#set($cptRefForLte="DIM_E_LTE_CAUSE_PROT_TYPE")
+#set($etRefForSgeh="DIM_E_SGEH_EVENTTYPE")
+#set($etRefForLte="DIM_E_LTE_EVENTTYPE")
+#set($ccRefForSgeh="dc.DIM_E_SGEH_CAUSECODE")
+#set($ccRefForLte="dc.DIM_E_LTE_CAUSECODE")
+#set($sccRefForSgeh="dc.DIM_E_SGEH_SUBCAUSECODE")
+#set($sccRefForLte="dc.DIM_E_LTE_SUBCAUSECODE")
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+
+#macro(SELECT_INTO_TEMP_TABLE $rawview $tempName)
+SELECT
+	#if($count > 0)
+	  top $count 
+	#end
+	*
+INTO
+	$tempName
+FROM
+	(
+		SELECT 
+			raw.*
+		FROM
+			$rawview raw
+		WHERE
+		#if(!${groupDefinitions})
+			#GET_COLUMNS_WHERE_BY_TABLE("raw" $columns)
+			#AND_DATETIME_RANGE()
+		#else
+			 raw.APN IN
+             (
+           		SELECT DISTINCT
+                	APN
+                FROM
+                	$groupTable groupref
+                WHERE
+                groupref.GROUP_NAME = :$ApplicationConstants.GROUP_NAME_PARAM
+                )
+			#AND_DATETIME_RANGE()
+		#end			
+			and raw.CAUSE_PROT_TYPE = :$ApplicationConstants.CAUSE_PROT_TYPE 
+			and raw.CAUSE_CODE = :$CAUSE_CODE
+			and raw.SUBCAUSE_CODE = :$SUBCAUSE_CODE
+		order by 
+			RAW.DATETIME_ID DESC
+	)AS TEMP
+ORDER BY 
+	TEMP.DATETIME_ID DESC;
+#end
+
+
+
+#macro(CCAD_SGEH_QUERY $cptTable $etTable $ccTable $sccTable )
+select sgehcptref.CAUSE_PROT_TYPE, sgehcptref.CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, ccref.CAUSE_CODE_DESC, sccref.SUBCAUSE_CODE, sccref.SUBCAUSE_CODE_DESC, sgehetref.EVENT_ID, sgehetref.EVENT_ID_DESC, erref.EVENT_RESULT, erref.EVENT_RESULT_DESC, ratref.RAT, ratref.RAT_DESC, service_req.SERVICE_REQ_TRIGGER, service_req.SERVICE_REQ_TRIGGER_DESC, DATETIME_ID, EVENT_TIME, IMSI, tacref.TAC, tacref.MANUFACTURER, tacref.Marketing_Name, sgehraw.EVENT_SOURCE_NAME, sgehraw.HIERARCHY_3, sgehraw.HIERARCHY_2, sgehraw.HIERARCHY_1, sgehraw.VENDOR, ggsnref.GGSN_NAME, sgsnref.SGSN_NAME, LINKED_NSAPI, PDP_NSAPI_1, PDP_GGSN_IPADDRESS_1, PDP_GGSN_NAME_1, PDP_MS_IPADDRESS_1, PDP_NSAPI_2, PDP_GGSN_IPADDRESS_2, PDP_GGSN_NAME_2, PDP_MS_IPADDRESS_2, PAGING_ATTEMPTS, REQUEST_RETRIES, sgehraw.APN, MCC, MNC, RAC, LAC, UPDATE_TYPE, OLD_SGSN_IPADDRESS, OLD_MCC, OLD_MNC, OLD_RAC, OLD_LAC, TRANSFERRED_PDP, DROPPED_PDP, HLR, DEACTIVATION_TRIGGER
+	from
+		(
+		#foreach($rawTable in $rawNonLteTables)
+			SELECT raw.* from #temp_${rawTable} raw
+			#if($velocityCount < $rawNonLteTables.size())
+				union all
+			#end
+		#end ) sgehraw,
+        dc.$etTable sgehetref,
+		dc.$cptTable sgehcptref,
+        $ccTable ccref,
+        $sccTable sccref,
+        dc.DIM_E_SGEH_EVENTRESULT erref,
+        dc.DIM_E_SGEH_TAC tacref,
+		dc.DIM_E_SGEH_SGSN sgsnref,
+		dc.DIM_E_SGEH_GGSN ggsnref,
+        dc.DIM_E_SGEH_RAT ratref,
+		dc.DIM_E_SGEH_SERVICE_REQ_TRIGGER service_req
+		#if(${groupDefinitions})
+		,dc.$groupTable groupref
+		#end
+    where
+		#if(!${groupDefinitions})
+			#GET_COLUMNS_WHERE_BY_TABLE("sgehraw" $columns)
+			#AND_DATETIME_RANGE()
+		#else
+			#GET_JOIN("sgehraw" "groupref" $joinKeys)
+			and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#AND_DATETIME_RANGE()
+		#end
+		and sgehraw.CAUSE_PROT_TYPE = :$ApplicationConstants.CAUSE_PROT_TYPE 
+		and sgehraw.CAUSE_CODE = :$CAUSE_CODE
+		and sgehraw.SUBCAUSE_CODE = :$SUBCAUSE_CODE
+		and sgehraw.EVENT_ID = sgehetref.EVENT_ID
+		and sgehraw.CAUSE_PROT_TYPE = sgehcptref.CAUSE_PROT_TYPE
+		and sgehraw.CAUSE_PROT_TYPE = ccref.CAUSE_PROT_TYPE
+		and sgehraw.CAUSE_CODE = ccref.CAUSE_CODE
+		and sgehcptref.CAUSE_PROT_TYPE = ccref.CAUSE_PROT_TYPE
+		and sgehraw.SUBCAUSE_CODE = sccref.SUBCAUSE_CODE
+		and sgehraw.EVENT_RESULT = erref.EVENT_RESULT    
+		and sgehraw.TAC *= tacref.TAC
+		and sgehraw.OLD_SGSN_IPADDRESS *= sgsnref.IP_ADDRESS	
+		and sgehraw.PDP_GGSN_NAME_1 *= ggsnref.GGSN_IPADDRESS
+		and sgehraw.PDP_GGSN_NAME_2 *= ggsnref.GGSN_IPADDRESS
+		and sgehraw.RAT = ratref.RAT
+		and sgehraw.SERVICE_REQ_TRIGGER *= service_req.SERVICE_REQ_TRIGGER
+#end
+
+#macro(CCAD_LTE_QUERY $cptTable $etTable $ccTable $sccTable)
+select cptref.CAUSE_PROT_TYPE, cptref.CAUSE_PROT_TYPE_DESC, ccref.CAUSE_CODE, ccref.CAUSE_CODE_DESC, sccref.SUBCAUSE_CODE, sccref.SUBCAUSE_CODE_DESC, etref.EVENT_ID, etref.EVENT_ID_DESC, erref.EVENT_RESULT, erref.EVENT_RESULT_DESC, ratref.RAT, ratref.RAT_DESC, service_req.SERVICE_REQ_TRIGGER, service_req.SERVICE_REQ_TRIGGER_DESC, DATETIME_ID, EVENT_TIME, IMSI, tacref.TAC, tacref.MANUFACTURER, tacref.Marketing_Name, lteraw.EVENT_SOURCE_NAME, lteraw.HIERARCHY_3, lteraw.HIERARCHY_2, lteraw.HIERARCHY_1, lteraw.VENDOR, null, null, null, null, null, null, null, null, null, null, null, PAGING_ATTEMPTS, REQUEST_RETRIES, lteraw.APN, MCC, MNC, null, null, null, null, OLD_MCC, OLD_MNC, null, null, null, null, null, DEACTIVATION_TRIGGER
+		from
+		(
+		#foreach($rawTable in $rawLteTables)
+				SELECT raw.* from #temp_${rawTable} raw
+			#if($velocityCount < $rawLteTables.size())
+				union all
+			#end
+		#end ) lteraw,
+        dc.$etTable etref,
+		dc.$cptTable cptref,
+        $ccTable ccref,
+        $sccTable sccref,
+        dc.DIM_E_SGEH_EVENTRESULT erref,
+        dc.DIM_E_SGEH_TAC tacref,
+        dc.DIM_E_SGEH_RAT ratref,
+		dc.DIM_E_SGEH_SERVICE_REQ_TRIGGER service_req
+		#if(${groupDefinitions})
+		,dc.$groupTable groupref
+		#end
+    where
+		#if(!${groupDefinitions})
+			#GET_COLUMNS_WHERE_BY_TABLE("lteraw" $columns)
+			#AND_DATETIME_RANGE()
+		#else
+			#GET_JOIN("lteraw" "groupref" $joinKeys)
+			and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#AND_DATETIME_RANGE()
+		#end
+		and lteraw.CAUSE_PROT_TYPE = :$ApplicationConstants.CAUSE_PROT_TYPE 
+		and lteraw.CAUSE_CODE = :$CAUSE_CODE
+		and lteraw.SUBCAUSE_CODE = :$SUBCAUSE_CODE
+		and lteraw.EVENT_ID = etref.EVENT_ID
+		and lteraw.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+		and lteraw.CAUSE_PROT_TYPE = ccref.CAUSE_PROT_TYPE
+		and cptref.CAUSE_PROT_TYPE = ccref.CAUSE_PROT_TYPE
+		and lteraw.CAUSE_CODE = ccref.CAUSE_CODE
+		and lteraw.SUBCAUSE_CODE = sccref.SUBCAUSE_CODE
+		and lteraw.EVENT_RESULT = erref.EVENT_RESULT    
+		and lteraw.TAC *= tacref.TAC
+		and lteraw.RAT = ratref.RAT
+		and lteraw.SERVICE_REQ_TRIGGER *= service_req.SERVICE_REQ_TRIGGER
+#end
+
+
+#foreach ($rawtable in $rawNonLteTables)
+	#SELECT_INTO_TEMP_TABLE($rawtable "#temp_${rawtable}") 
+#end
+
+#foreach ($rawtable in $rawLteTables)
+	#SELECT_INTO_TEMP_TABLE($rawtable "#temp_${rawtable}") 
+#end
+
+
+select
+	#if($count > 0)
+	  top $count
+	#end
+       #if($csv == true)
+   	      DATEADD(minute,$tzOffset,rawview.EVENT_TIME)AS 'Event Time',
+   	    #else
+   	      rawview.EVENT_TIME AS 'Event Time',
+   	    #end 
+    rawview.IMSI,
+    rawview.TAC,
+    rawview.MANUFACTURER,
+    rawview.Marketing_Name,
+    rawview.EVENT_ID_DESC,
+    rawview.EVENT_RESULT_DESC,
+    rawview.CAUSE_PROT_TYPE_DESC,
+    rawview.CAUSE_CODE,
+    rawview.CAUSE_CODE_DESC,
+    rawview.SUBCAUSE_CODE,
+    rawview.SUBCAUSE_CODE_DESC,    
+    rawview.EVENT_SOURCE_NAME,
+    rawview.RAT_DESC,
+    rawview.HIERARCHY_3,
+    rawview.HIERARCHY_2,
+    rawview.HIERARCHY_1,
+    rawview.VENDOR,
+	rawview.LINKED_NSAPI,
+    rawview.PDP_NSAPI_1,
+	(case when (rawview.PDP_GGSN_IPADDRESS_1 is not null) then (case when (rawview.PDP_GGSN_NAME_1 is null) then isnull(rawview.GGSN_NAME,  
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_1,1,1)) as varchar(30)) || '.' ||
+   	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_1,2,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_1,3,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_1,4,2)) as varchar(30)))
+	else rawview.PDP_GGSN_NAME_1 end)else '' end) as PDP_GGSN_NAME_1,
+	(case when (rawview.PDP_MS_IPADDRESS_1 is not null) then(
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_1,1,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_1,2,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_1,3,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_1,4,2)) as varchar(30)))
+	else '' end) as PDP_MS_IPADDRESS_1,
+    rawview.PDP_NSAPI_2, 
+	(case when (rawview.PDP_GGSN_IPADDRESS_2 is not null) then (case when (rawview.PDP_GGSN_NAME_2 is null) then isnull(rawview.GGSN_NAME, 
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_2,1,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_2,2,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_2,3,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_GGSN_IPADDRESS_2,4,2)) as varchar(30)))
+	else rawview.PDP_GGSN_NAME_2 end)else '' end) as PDP_GGSN_NAME_2,
+	
+	(case when (rawview.PDP_MS_IPADDRESS_2 is not null) then(
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_2,1,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_2,2,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_2,3,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.PDP_MS_IPADDRESS_2,4,2)) as varchar(30)))
+	else '' end) as PDP_MS_IPADDRESS_2,
+    rawview.PAGING_ATTEMPTS,
+    rawview.SERVICE_REQ_TRIGGER_DESC,
+    rawview.REQUEST_RETRIES,
+    rawview.APN,
+    rawview.MCC,
+    rawview.MNC,
+    rawview.RAC,
+    rawview.LAC,
+    rawview.UPDATE_TYPE,
+	(case when (rawview.OLD_SGSN_IPADDRESS is not null) then isnull(rawview.SGSN_NAME, 
+	cast(convert(unsigned int, substr(rawview.OLD_SGSN_IPADDRESS,1,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.OLD_SGSN_IPADDRESS,2,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.OLD_SGSN_IPADDRESS,3,1)) as varchar(30)) || '.' ||
+	cast(convert(unsigned int, substr(rawview.OLD_SGSN_IPADDRESS,4,2)) as varchar(30)))
+	else '' end) as OLD_SGSN_NAME,
+    rawview.OLD_MCC,
+    rawview.OLD_MNC,    
+    rawview.OLD_RAC,
+    rawview.OLD_LAC,
+    rawview.TRANSFERRED_PDP,
+    rawview.DROPPED_PDP,
+    rawview.HLR,
+    rawview.DEACTIVATION_TRIGGER,
+    rawview.CAUSE_CODE,
+    rawview.SUBCAUSE_CODE,
+    rawview.EVENT_RESULT,
+    rawview.CAUSE_PROT_TYPE,
+    rawview.RAT
+from
+	(
+		#if ($useNonLteTables)
+			#CCAD_SGEH_QUERY($cptRefForSgeh $etRefForSgeh $ccRefForSgeh $sccRefForSgeh)
+		#end
+		#if ($useLteTables && $useNonLteTables)
+			UNION ALL
+		#end
+		#if($useLteTables)
+			#CCAD_LTE_QUERY($cptRefForLte $etRefForLte $ccRefForLte $sccRefForLte)
+		#end
+	) as rawview (CAUSE_PROT_TYPE, CAUSE_PROT_TYPE_DESC, CAUSE_CODE, CAUSE_CODE_DESC, SUBCAUSE_CODE, SUBCAUSE_CODE_DESC, EVENT_ID, EVENT_ID_DESC, EVENT_RESULT, EVENT_RESULT_DESC, RAT, RAT_DESC, SERVICE_REQ_TRIGGER, SERVICE_REQ_TRIGGER_DESC, DATETIME_ID, EVENT_TIME, IMSI, TAC, MANUFACTURER, Marketing_Name, EVENT_SOURCE_NAME, HIERARCHY_3, HIERARCHY_2, HIERARCHY_1, VENDOR, GGSN_NAME, SGSN_NAME, LINKED_NSAPI, PDP_NSAPI_1, PDP_GGSN_IPADDRESS_1, PDP_GGSN_NAME_1, PDP_MS_IPADDRESS_1, PDP_NSAPI_2, PDP_GGSN_IPADDRESS_2, PDP_GGSN_NAME_2, PDP_MS_IPADDRESS_2, PAGING_ATTEMPTS, REQUEST_RETRIES, APN, MCC, MNC, RAC, LAC, UPDATE_TYPE, OLD_SGSN_IPADDRESS, OLD_MCC, OLD_MNC, OLD_RAC, OLD_LAC, TRANSFERRED_PDP, DROPPED_PDP, HLR, DEACTIVATION_TRIGGER)
+
+order by
+	DATETIME_ID desc
+

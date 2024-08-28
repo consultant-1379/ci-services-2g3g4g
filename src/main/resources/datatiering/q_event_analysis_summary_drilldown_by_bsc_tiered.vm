@@ -1,0 +1,66 @@
+##=============================================================================
+##
+## Event Analysis: Percentage ratio/KPI drilldown
+##
+## Description: 
+##
+## Velocity Parameters:
+##
+## type : BSC
+##
+## drilltype : one of {BSC, CELL}
+##
+##
+## Named Prepared Statement Parameters:
+##
+##    :dateFrom starting time
+##    :dateTo ending time
+##    :$ApplicationConstants.SGSN_PARAM
+##    :$SGSN
+##    :$BSC
+##    :$RAT
+##    :$VENDOR
+##    :$CELL
+## 
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#if(${drilltype} == $TYPE_BSC)
+    #set($columns=[$CELL])
+	#set($columnsToSelectErrorRAW=[$CELL, $IMSI])
+	#set($columnsToSelectAsResult=":$RAT, :$VENDOR, :$BSC, $CELL, RAT_DESC, :$ApplicationConstants.EVENT_ID_PARAM, EVENT_ID_DESC, NO_OF_ERRORS, NO_OF_SUCCESSES, OCCURRENCES,KPI, NO_OF_TOTAL_ERR_SUBSCRIBERS")
+	#set($conditionToSelectErrorRAW="and $EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM and $BSC = :$BSC and $RAT = :$RAT and $VENDOR = :$VENDOR")
+    #set($agg_t_SGEH="EVENT_E_SGEH_VEND_HIER321_EVENTID")
+    #set($agg_t_LTE="EVENT_E_LTE_VEND_HIER321_EVENTID")
+	#set($ccscc=false)
+#elseif(${drilltype} == $TYPE_CELL)
+    #set($columns=[$CAUSE_CODE, $SUBCAUSE_CODE])
+	#set($columnsToSelectErrorRAW=[$CAUSE_CODE, $SUBCAUSE_CODE, $IMSI])
+	#set($columnsToSelectAsResult=":$RAT, :$VENDOR, :$BSC, :$CELL, CAUSE_CODE_DESC, SUBCAUSE_CODE_DESC, RAT_DESC, :$ApplicationConstants.EVENT_ID_PARAM,EVENT_ID_DESC, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS")
+	#set($conditionToSelectErrorRAW="and $EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM and $BSC = :$BSC and $RAT = :$RAT and $VENDOR = :$VENDOR and $CELL = :$CELL")
+	#set($ccscc=true)
+#end
+
+#set ($sucviewSGEH="${agg_t_SGEH}_SUC$sucTimerange")
+#set ($sucviewLTE="${agg_t_LTE}_SUC$sucTimerange")
+#set ($useExclusiveTAC="no")
+
+SELECT 
+ $columnsToSelectAsResult
+FROM (
+	#KPI_RATIO_QUERY_FOR_DATA_TIERED($columns $ApplicationConstants.SGEH $sucviewSGEH $techPackTablesSGEH.getErrTables() $techPackTablesSGEH.getSucTables() $useRawSuc $ccscc)
+	#if($techPackTablesLTE.getErrTables().size() > 0)
+		union all
+	#KPI_RATIO_QUERY_FOR_DATA_TIERED($columns $ApplicationConstants.LTE $sucviewLTE $techPackTablesLTE.getErrTables() $techPackTablesLTE.getSucTables() $useRawSuc $ccscc)
+	#end
+	) as KPI_RATIO_RESULT
+	,DIM_E_SGEH_RAT ratref
+WHERE
+	ratref.RAT = :$RAT
+ORDER BY
+#if($ccscc)
+NO_OF_ERRORS
+#else
+KPI
+#end

@@ -1,0 +1,85 @@
+##=============================================================================
+##
+## IMSI Ranking towards raw tables
+##
+## Description:
+##
+##    Provide the top n IMSIs based on failures, whether the subscriber is VIP or not need to be diplayed too
+##
+## Velocity Parameter:
+##
+##
+## count: top N IMSI
+## techPackTables: see TechPackTables's javadoc
+##
+## Named PreparedStatement Parameter:
+##
+##    :dateFrom   starting time
+##    :dateTo     ending time
+##
+## Author: ezhelao
+##
+
+
+##new function to replace raw views with raw tables and specify columns to be contained in the result set
+##this function filters only on the datetime range
+#macro (PRIVATE_IMSI_TIERED_QUERY_USING_ERR_RAW $rawtables $rawview)
+(
+select IMSI, SUM(NO_OF_ERRORS) from
+    (
+    #foreach ($rawtable in $rawtables)
+    select IMSI,count(*) as NO_OF_ERRORS
+    from dc.$rawtable
+    where
+        #GET_DATETIME_RANGE()
+        and #GET_IMSI0_EXCLUSION($rawtable)
+        and  #GET_TAC_EXCLUSION_BY_TABLE($rawtable)
+    group by
+            IMSI
+        #if($velocityCount < $rawtables.size())
+        union all
+        #end
+    #end
+    )  as temp_$rawview(IMSI,NO_OF_ERRORS)
+    group by IMSI
+) as $rawview (IMSI ,NO_OF_ERRORS)
+#end
+
+
+#DEFINE_CONSTANTS()
+#set($columns=["IMSI", "TAC"])
+begin
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_ERRORS desc) as RANK,
+    err.IMSI,
+    NO_OF_ERRORS,
+    isnull(NO_OF_SUCCESSES,0) as NO_OF_SUCCESSES
+from
+	#PRIVATE_IMSI_TIERED_QUERY_USING_ERR_RAW($TECH_PACK_LIST.getAllRawErrTables() "err")
+    left outer join
+
+    (SELECT IMSI,sum(NO_OF_SUCCESSES) as NO_OF_SUCCESSES from
+    (
+        #foreach($table in $TECH_PACK_LIST.getAllRawTablesWithMeasurementType()) ## Using EVENT_E_LTE_IMSI_RAW and EVENT_E_SGEH_IMSI_RAW table instead of view
+             #if ($velocityCount>1)
+                 union all
+            #end
+            (select IMSI,sum(NO_OF_SUCCESSES) as NO_OF_SUCCESSES from dc.$table WHERE #GET_DATETIME_RANGE() group by IMSI)
+        #end
+        ) as all_suc
+    group by
+        IMSI
+    ) as suc(
+        IMSI,
+        NO_OF_SUCCESSES
+     )
+    on(
+        err.IMSI = suc.IMSI
+    )
+order by
+    RANK
+
+end

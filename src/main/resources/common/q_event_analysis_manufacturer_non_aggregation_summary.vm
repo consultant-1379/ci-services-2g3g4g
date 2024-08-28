@@ -1,0 +1,93 @@
+##
+## Event Analysis Summary by Manufacturer (flow in UI is from TAC ranking - TAC drilldown)
+##
+## Description: 
+##
+##  Event Analysis Summary by Manufacturer (flow in UI is from TAC ranking - TAC drilldown)
+##
+## Parameter: 
+##
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##  
+##     TR_1 : query against raw events   
+##     TR_2 : query against 1min agg
+##     TR_3 : query against 15min agg
+##     TR_4 : query against daily agg
+## 
+## Author : eriwals 31/03/2011
+##
+#DEFINE_CONSTANTS()
+#set($agg_t="EVENT_E_SGEH_MANUF_TAC_EVENTID")
+#set($agg_t_lte="EVENT_E_LTE_MANUF_TAC_EVENTID")
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#set($columnsToSelect=["EVENT_ID","IMSI","TAC"])
+
+select    
+    #GET_NOT_NULL_COLUMN(["suc","err"] ["MANUFACTURER"])
+    isnull(etref.EVENT_ID, lteetref.EVENT_ID) as EVENT_ID,
+    isnull(etref.EVENT_ID_DESC, lteetref.EVENT_ID_DESC) as EVENT_ID_DESC,	
+    sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    sum(isnull(NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+	NO_OF_ERRORS+NO_OF_SUCCESSES as OCCURRENCES,
+    cast(round((1- isnull(isnull(NO_OF_ERRORS,0)/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2)) as SUCCESS_RATIO,
+    max(isnull(NO_OF_TOTAL_ERR_SUBSCRIBERS,0)) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+from        
+    (select 
+        tacref.MANUFACTURER,        
+        temp_err.EVENT_ID,		
+        count(*),
+        count(distinct(IMSI))
+    from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawErrTables() "temp_err" $columnsToSelect),
+        dc.DIM_E_SGEH_TAC tacref
+    where
+        temp_err.TAC = tacref.TAC
+        and tacref.MANUFACTURER = :$ApplicationConstants.TYPE_MAN
+		#if(${useTACExclusion})
+			and temp_err.TAC not in (select TAC from dc.GROUP_TYPE_E_TAC where GROUP_NAME = 'EXCLUSIVE_TAC')
+		#end
+    group by
+        MANUFACTURER,
+        EVENT_ID
+    ) as err(MANUFACTURER,EVENT_ID, NO_OF_ERRORS, NO_OF_TOTAL_ERR_SUBSCRIBERS)
+    full outer join
+    (select
+        tacref.MANUFACTURER,
+        temp_suc.EVENT_ID,		
+        count(*)
+    from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawSucTables() "temp_suc" $columnsToSelect),
+        dc.DIM_E_SGEH_TAC tacref
+    where
+        temp_suc.TAC = tacref.TAC
+        and tacref.MANUFACTURER = :$ApplicationConstants.TYPE_MAN
+		#if(${useTACExclusion})
+			and temp_suc.TAC not in (select TAC from dc.GROUP_TYPE_E_TAC where GROUP_NAME = 'EXCLUSIVE_TAC')
+		#end
+    group by
+        MANUFACTURER,        
+        EVENT_ID
+    ) as suc(MANUFACTURER,EVENT_ID,NO_OF_SUCCESSES)
+    on(
+        #GET_JOIN("suc" "err" ["MANUFACTURER","EVENT_ID"])
+    )left outer join
+        dc.DIM_E_SGEH_EVENTTYPE etref
+    on(
+        isnull(suc.EVENT_ID, err.EVENT_ID) = etref.EVENT_ID
+    )	
+	left outer join 
+		dc.DIM_E_LTE_EVENTTYPE lteetref
+	on(
+		isnull(suc.EVENT_ID, err.EVENT_ID) = lteetref.EVENT_ID
+	)
+group by
+    MANUFACTURER,
+    etref.EVENT_ID,
+	lteetref.EVENT_ID,
+    etref.EVENT_ID_DESC,
+	lteetref.EVENT_ID_DESC	
+having
+	EVENT_ID between 0 and 255    ##EVENT_ID is a tinyint in database
+order by
+    OCCURRENCES
+desc

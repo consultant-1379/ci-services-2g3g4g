@@ -1,0 +1,190 @@
+##=============================================================================
+##
+## Network analysis : Event summary
+##
+## Description:
+##
+##    event volumns for the whole network or single node
+##
+## Velocity Paramters: 
+##
+##     summarytype : one of {ERROR_SUMMARY, TOTAL_SUMMARY}
+##  
+##     timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##   
+##         TR_1 : query against raw events   
+##         TR_2 : query against 1min agg
+##         TR_3 : query against 15min agg
+##         TR_4 : query against daily agg
+##
+##     starttime : starting time
+##
+##     endtime : ending time
+##
+##     type : one of {BSC, CELL, SGSN}
+##
+##     node : one of {ALL, SINGLE}
+##
+##         ALL : the whole network 
+##         SINGLE : used together with type
+##
+## Named Prepared Statement parameters:
+##
+##    :dateFrom starting point
+##    :dateTo   ending point
+##    :EVENT_SOURCE_NAME event source name
+##    :VENDOR   vendor information for BSC/CELL
+##    :HIERARCHY_3 first level topology
+##    :HIERARCHY_1 third level topology
+##
+## Scenarios:
+##
+##     1. Summary for the whole network
+##
+##         timerange, count, interval, starttime, node=ALL(optional)
+##
+##     2. Summary for a selected node
+##
+##         timerange, count, interval, starttime, node=SINGLE, type
+##
+## Author: exuexie 23/07/2010
+##
+## Changes:
+##		eavidat 19/04/11 : 4G support	
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+
+begin
+
+#macro(EVENT_VOLUME_QUERY_FOR_NON_AGG $errTablesToUseInQuery $sucTablesToUseInQuery)
+	#EVENT_VOLUME_SELECT($type)
+	from
+    (select 
+        tmp_st
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end   
+		,EVENT_ID
+		,count(*)
+    from
+		#if($isTypeNode)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInQuery "err" $columns $columnsToIncludeInRAWView)
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInQuery "err" $columnsToIncludeInRAWView)
+		#end	
+        ,#GET_CHART_TIMES($starttime $endtime $interval)
+    where        
+		DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et
+    group by
+        tmp_st
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end
+        ,EVENT_ID
+    )as err (
+        TS,
+        #if($isTypeNode)
+			#GET_COLUMNS($columns)
+        #end    
+        EVENT_ID, 
+        NO_OF_ERRORS)
+    full outer join
+    (select 
+        tmp_st
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end    
+        ,EVENT_ID
+		,sum(NO_OF_SUCCESSES)
+    from 
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($sucTablesToUseInQuery "suc" $columnsToIncludeInAggViewSuc)
+        ,#GET_CHART_TIMES($starttime $endtime $interval)
+    where        
+		DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et
+		#if($isTypeNode)
+			and #GET_COLUMNS_WHERE($columns)
+		#end
+		and #GET_DATETIME_RANGE()
+    group by
+        tmp_st
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end
+        ,EVENT_ID
+    ) as suc(
+        TS, 
+        #if($isTypeNode)
+			#GET_COLUMNS($columns)
+        #end  
+        EVENT_ID, 
+        NO_OF_SUCCESSES)
+    on(
+        #GET_JOIN("suc" "err" ["TS", "EVENT_ID"])
+        #if($isTypeNode)
+			and #GET_JOIN("suc" "err" $columns)
+        #end
+    )
+	#if(${type})
+    full outer join
+    (select
+        tmp_st   
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+		#end
+		,count(distinct(IMSI))
+    from
+		#if($isTypeNode)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInIMSICount "sub" $columns $columnsToIncludeInIMSICount)
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($errTablesToUseInIMSICount "sub" $columnsToIncludeInIMSICount)
+		#end
+        ,#GET_CHART_TIMES($starttime $endtime $interval)
+    where        
+		DATETIME_ID >= tmp_st
+        and DATETIME_ID < tmp_et		
+    group by
+        tmp_st
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end   
+    ) as sub(
+        TS
+        #if($isTypeNode)
+			,#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+        #end            
+			,NO_OF_TOTAL_ERR_SUBSCRIBERS
+		)
+    on(
+        #GET_MULTI_JOIN(["suc","err"] "sub" ["TS"])
+        #if($isTypeNode)
+			and #GET_MULTI_JOIN(["suc","err"] "sub" $columns)
+        #end        
+    )
+	#end
+    left outer join
+        (
+		select EVENT_ID from dc.DIM_E_SGEH_EVENTTYPE
+			union all
+		select EVENT_ID from dc.DIM_E_LTE_EVENTTYPE
+		)etref
+    on(
+        etref.EVENT_ID = isnull(suc.EVENT_ID, err.EVENT_ID)
+    )
+	group by
+		TS
+#end
+
+select 
+	*
+from (
+	#if($techPackTables.getErrTables().size() > 0  && $sucAggTables.size() > 0)
+		#EVENT_VOLUME_QUERY_FOR_NON_AGG($techPackTables.getErrTables() $sucAggTables)
+	#end 
+) EVENT_VOLUME_RESULT 
+order by
+	TS
+end	

@@ -1,0 +1,89 @@
+##=============================================================================
+##
+## Ranking
+##
+## Description: 
+## Ranking query that queries err raw table and suc 15min aggregation table for Cause Code ranking results
+##  
+## Velocity parameter:
+## count : number of rows returned
+##
+## Named PreparedStatement Parameter:
+## :dateFrom - starting time
+## :dateTo - ending time
+##
+##=============================================================================
+#DEFINE_CONSTANTS()
+
+#macro(SELECT_DATA_TIERED_RANKING_DATA $columns $errRawTable $sucAggTable $dimCauseCodeTable $dimCauseProtTable $useExclusiveTAC)
+SELECT
+	CAUSE_PROT_TYPE_DESC,
+	CAUSE_CODE_DESC,
+	#GET_NOT_NULL_COLUMN(["temp_err", "temp_suc"] $columns)
+    MAX(isnull(NO_OF_ERRORS, 0))                       AS NO_OF_ERRORS,
+    MAX(isnull(NO_OF_SUCCESSES,0))                     AS NO_OF_SUCCESSES
+FROM
+    (select
+        #GET_COLUMNS($columns)
+        count(*) as NO_OF_ERRORS
+    from	
+    	#REPLACE_RAW_VIEW_WITH_RAW_TABLES_TAC_EXCLUSION_SPECIFY_COLUMNS_CONDITIONED($errRawTable "err" $columns "" $useExclusiveTAC "")
+    group by
+    	#GET_COLUMNS_NO_COMMA_TRAILING($columns)
+    ) as temp_err (#GET_COLUMNS($columns) NO_OF_ERRORS)
+FULL OUTER JOIN
+    (select
+        #GET_COLUMNS($columns)
+        sum(NO_OF_SUCCESSES)
+    from		
+    	$sucAggTable
+    where
+    	#GET_DATETIME_RANGE()
+    group by
+        #GET_COLUMNS_NO_COMMA_TRAILING($columns)
+    	) as temp_suc (#GET_COLUMNS($columns) NO_OF_SUCCESSES)
+ON(
+    #GET_JOIN("temp_err" "temp_suc" $columns)
+)
+LEFT OUTER JOIN $dimCauseCodeTable ref_causecode
+ON (
+	isnull(temp_err.CAUSE_CODE, temp_suc.CAUSE_CODE) = ref_causecode.CAUSE_CODE
+	AND
+	isnull(temp_err.CAUSE_PROT_TYPE, temp_suc.CAUSE_PROT_TYPE) = ref_causecode.CAUSE_PROT_TYPE
+)
+LEFT OUTER JOIN $dimCauseProtTable ref_causeProt
+ON (
+	isnull(temp_err.CAUSE_PROT_TYPE, temp_suc.CAUSE_PROT_TYPE) = ref_causeProt.CAUSE_PROT_TYPE
+)
+GROUP BY
+	CAUSE_PROT_TYPE_DESC,
+	CAUSE_CODE_DESC,
+	#GET_COLUMNS_WITH_TABLE_NAMES(["temp_err", "temp_suc"] $columns)
+#end
+
+#DEFINE_CONSTANTS()
+#set($removeExclusiveTAC="true")
+
+SELECT 
+	#if($count > 0)
+	  top $count
+	#end
+	rank() over (order by NO_OF_ERRORS desc) as RANK,
+	CAUSE_PROT_TYPE_DESC,
+	CAUSE_CODE_DESC,
+    #GET_COLUMNS_BY_TABLE("temp_result" $columnsForQuery)
+	sum(NO_OF_ERRORS) as NO_OF_ERRORS,    
+    sum(NO_OF_SUCCESSES) as NO_OF_SUCCESSES
+FROM
+	(
+	#foreach($techPack in $TECH_PACK_LIST.getTechPacks())
+   		#SELECT_DATA_TIERED_RANKING_DATA($columnsForQuery $techPack.getRawErrTables() $techPack.getSucAggregationView() "${techPack.getStaticLookupTechpack()}_CAUSECODE" "${techPack.getStaticLookupTechpack()}_CAUSE_PROT_TYPE" $removeExclusiveTAC)
+		#if($velocityCount < $TECH_PACK_LIST.getTechPacks().size())
+	union all
+		#end
+	#end
+	) AS temp_result
+GROUP BY
+	#GET_COLUMNS_BY_TABLE("temp_result" $columnsForQuery)
+	CAUSE_PROT_TYPE_DESC,
+	CAUSE_CODE_DESC

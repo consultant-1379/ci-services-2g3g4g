@@ -1,0 +1,158 @@
+##=============================================================================
+## EVARZOL - July 2011
+##
+## Data Volume by Network Entity
+##  
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##  
+##     TR_1 : query against raw   
+##     TR_2 : query against 1min agg
+##     TR_3 : query against 15min agg
+##     TR_4 : query against daily agg 
+##
+## Description: 
+## 
+##     Gets the data volume by APN or SGSN 
+## 
+##=============================================================================
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#foreach($techPack in $techPackTables.getTechPacks())
+	#set($dtTables=$techPack.getDtTables())
+	#set($dtPdpTables=$techPack.getDtPdpTables())
+#end
+#set($dtSelectColumns = ["APN", "SGSN_NAME", "DATAVOL_DL", "DATAVOL_UL", "DATETIME_ID"])
+#set($dtPdpSelectColumns = ["APN", "SGSN_NAME_1", "SGSN_NAME_2", "SGSN_NAME_3", "SGSN_NAME_4", "SGSN_NAME_5", "DATETIME_ID"])
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end 
+
+
+
+#if(${type}==$TYPE_APN)
+#set($columns=[$APN])
+#elseif(${type}==$TYPE_SGSN)
+#set($columns=[$SGSN])
+#end
+
+#set($tpUnit=1048576)
+
+begin
+
+select
+	dateformat(isnull(dttable.TS, dtpdptable.TS), 'yyyy-mm-dd hh:mm:ss.S') as TS,
+	convert(numeric(16,3), MAX(convert(numeric(16,2), dttable.DATAVOL_DL)/$tpUnit)) as DATAVOL_DL,
+	convert(numeric(16,3), MAX(convert(numeric(16,2), dttable.DATAVOL_UL)/$tpUnit)) as DATAVOL_UL,
+	MAX(dtpdptable.NO_OF_BEARERS) AS TOTAL_BEARER_COUNT
+from
+	   (select
+			tmp_st,
+			SUM(DATAVOL_DL),
+			SUM(DATAVOL_UL)
+		from
+			#if($useAggregationTables)
+				$dtTables temp_dt
+			#else
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($dtTables "temp_dt" $dtSelectColumns)
+			#end
+			#if($isgroup)
+				,$groupTable temp_group
+			#end
+			,#GET_CHART_TIMES($starttime $endtime $interval)
+		where
+			#if($isTypeNode)
+				#if($isgroup)
+					#if(${type}!=$TYPE_SGSN)
+						#GET_JOIN("temp_dt" "temp_group" $joinKeys)
+					#else
+						temp_dt.SGSN_NAME = temp_group.$SGSN
+					#end
+					AND temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				#else
+					#if(${type}!=$TYPE_SGSN)
+						#GET_COLUMNS_WHERE($columns)
+					#else 
+						SGSN_NAME = :$SGSN
+					#end
+				#end
+				AND
+			#end
+			temp_dt.DATETIME_ID >= tmp_st
+			AND temp_dt.DATETIME_ID < tmp_et
+			AND #GET_DATETIME_RANGE()
+		group by
+			tmp_st
+	) as dttable(TS,DATAVOL_DL,DATAVOL_UL)
+FULL OUTER JOIN
+	  (select
+			tmp_st,
+			#if($useAggregationTables)
+			SUM(NO_OF_TOTAL)
+			#else
+			count(*)
+			#end
+		from
+			#if($useAggregationTables)
+				$dtPdpTables temp_pdp
+			#else
+				#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($dtPdpTables "temp_pdp" $dtPdpSelectColumns)
+			#end
+			#if($isgroup)
+				,$groupTable temp_group
+			#end
+			,#GET_CHART_TIMES($starttime $endtime $interval)
+		where
+			#if($isTypeNode)
+				#if($isgroup)
+					#if(${type}!=$TYPE_SGSN)
+						#GET_JOIN("temp_pdp" "temp_group" $joinKeys)
+					#else
+						     #if($useAggregationTables)
+								temp_pdp.SGSN_NAME = temp_group.$SGSN
+							 #else
+							 (temp_pdp.SGSN_NAME_1 = temp_group.$SGSN
+                             OR temp_pdp.SGSN_NAME_2 = temp_group.$SGSN
+                             OR temp_pdp.SGSN_NAME_3 = temp_group.$SGSN
+                             OR temp_pdp.SGSN_NAME_4 = temp_group.$SGSN
+                             OR temp_pdp.SGSN_NAME_5 = temp_group.$SGSN)
+							 #end
+					#end
+					AND temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+				#else
+					#if(${type}!=$TYPE_SGSN)
+						#GET_COLUMNS_WHERE($columns)
+					#else
+							#if($useAggregationTables)
+								SGSN_NAME = :$SGSN
+							 #else
+						     (SGSN_NAME_1 = :$SGSN
+                             OR SGSN_NAME_2 = :$SGSN
+                             OR SGSN_NAME_3 = :$SGSN
+                             OR SGSN_NAME_4 = :$SGSN
+                             OR SGSN_NAME_5 = :$SGSN)
+							 #end
+					#end
+				#end
+				AND
+			#end
+			temp_pdp.DATETIME_ID >= tmp_st
+			AND temp_pdp.DATETIME_ID < tmp_et
+			AND #GET_DATETIME_RANGE()
+		group by
+			tmp_st
+	) as dtpdptable (TS, NO_OF_BEARERS)
+    on (dttable.TS = dtpdptable.TS)
+GROUP BY
+TS
+ORDER BY
+TS
+end

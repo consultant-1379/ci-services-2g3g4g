@@ -1,0 +1,63 @@
+##=============================================================================
+##
+## IMSI Ranking towards raw tables
+##
+## Description:
+##
+##    Provide the top n IMSIs based on failures, whether the subscriber is VIP or not need to be diplayed too
+##
+## Velocity Parameter:
+##
+##
+## count: top N IMSI
+## techPackTables: see TechPackTables's javadoc
+##
+## Named PreparedStatement Parameter:
+##
+##    :dateFrom   starting time
+##    :dateTo     ending time
+##
+## Author: exuexie 15/06/2010
+##
+## Changed: eavidat 26/10/2010 to replce raw view with raw tables (HM85658)
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#set($columns=["IMSI", "TAC"])
+begin
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_ERRORS desc) as RANK,
+    err.IMSI,
+    count(*) as NO_OF_ERRORS,
+    max(isnull(suc.NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES
+from    
+	#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS_WITH_IMSI0_EXCLUSION($TECH_PACK_LIST.getAllRawErrTables() "err" $columns)
+    left outer join
+    (select
+        IMSI,
+        count(*) as NO_OF_SUCCESSES      
+    from
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS_WITH_IMSI0_EXCLUSION($TECH_PACK_LIST.getAllRawSucTables() "suc" $columns)
+    where
+		#GET_TAC_EXCLUSION_BY_TABLE("suc")
+    group by
+        IMSI
+    ) as suc(
+        IMSI,        
+        NO_OF_SUCCESSES
+    )
+    on(
+        err.IMSI = suc.IMSI
+    )   
+where
+	#GET_TAC_EXCLUSION_BY_TABLE("err")
+group by
+    err.IMSI
+order by
+    RANK
+	
+end

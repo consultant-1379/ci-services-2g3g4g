@@ -1,0 +1,53 @@
+##
+## Device Analysis - Most popular device types
+##
+## Description: 
+##
+##     Get the most popular device types based on the total events
+##
+## Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for error/success part of the query
+## count : number of the top<> most popular device types
+##
+
+#DEFINE_CONSTANTS()
+
+	
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_EVENTS desc) as RANK,  
+    total.TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME,    
+    total.total as NO_OF_EVENTS,
+    tacref.Band
+from    
+    (select
+        isnull(err.tac,suc.tac) as tac, 
+        isnull(err.NO_OF_ERRORS,0) + isnull(suc.NO_OF_SUCCESSES,0) as total
+    from
+        (
+		#SUM_TAC_ERRORS($useAggregationTables $AGGREGATION_TABLES $RAW_TABLES)
+		) as err(TAC,NO_OF_ERRORS)
+		full outer join
+        (
+		#SUM_TAC_SUCCESSES($useAggregationTables $AGGREGATION_TABLES $RAW_TABLES)
+		) as suc(TAC,NO_OF_SUCCESSES)
+        on ( 
+        err.tac = suc.tac
+		)
+    )as total 
+	left outer join 
+    dc.DIM_E_SGEH_TAC tacref
+	on (
+    total.TAC = tacref.TAC
+	)
+order by
+    RANK
+    

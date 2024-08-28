@@ -1,0 +1,40 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	   xmlns:util="http://www.springframework.org/schema/util" xmlns:jee="http://www.springframework.org/schema/jee"
+
+
+	   xmlns:p="http://www.springframework.org/schema/p"
+	   xsi:schemaLocation="http://www.springframework.org/schema/beans
+						http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+						http://www.springframework.org/schema/context
+						http://www.springframework.org/schema/context/spring-context-3.0.xsd
+						http://www.springframework.org/schema/util
+						http://www.springframework.org/schema/util/spring-util-3.0.xsd
+						http://www.springframework.org/schema/jee
+						http://www.springframework.org/schema/jee/spring-jee-3.0.xsd">
+
+    <bean id="multipleRankingService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.ranking.MultipleRankingService"/>
+
+    <bean id="eventAnalysisService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.eventanalysis.EventAnalysisService"/>
+
+
+    <bean id="roamingDrillByCountryService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.roaminganalysis.RoamingDrillByCountryService"/>
+
+
+    <bean id="roamingDrillByOperatorService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.roaminganalysis.RoamingDrillByOperatorService"/>
+
+    <bean id="roamingDrillByOperatorDetailService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.roaminganalysis.RoamingDrillByOperatorDetailService"/>
+
+
+    <bean id="roamingDrillByCountryDetailService" parent="genericService"
+          class="com.ericsson.eniq.events.server.serviceprovider.impl.roaminganalysis.RoamingDrillByCountryDetailService"/>
+
+   
+
+
+</beans>

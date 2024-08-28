@@ -1,0 +1,81 @@
+##=============================================================================
+##
+## Datavolume analysis: detailed data volume data
+## -----------------------------------
+##
+## List data volume for APN, SGSN, TAC, IMSI Group, APN Group, SGSN Group, TERMINAL Group
+##
+## type : one of {SGSN, APN, TAC}
+##
+## if groupname is set then the type that's set is used as the group type
+##         IMSI: search by GROUP_NAME from IMSI GROUP table
+##         APN: search by GROUP_NAME from APN GROUP
+##		   SGSN: search by GROUP_NAME from SGSN GROUP
+##         TERMINAL: search by GROUP_NAME from TERMINAL group
+##
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#if(${type}==$TYPE_APN)
+#set($columns=[$APN])
+#elseif (${type}==$TYPE_TAC)
+#set($columns=[$TAC])
+#elseif(${type}==$TYPE_SGSN)
+#set($columns=[$SGSN])
+#end
+
+#if($groupDefinitions)
+	#SET_GROUP_TYPE($type)
+	#set($groupDef = $groupDefinitions.get($groupType))
+	#set($groupTable = $groupDef.getTableName())
+	#set($groupnameColumn = $groupDef.getGroupNameColumn())
+	#set($joinKeys = $groupDef.getGroupKeys())
+	#set($isgroup=true)
+#else
+	#set($isgroup=false)
+#end
+
+
+#if($isgroup||${type}==$ApplicationConstants.TYPE_SGSN||${type}==$ApplicationConstants.TYPE_APN)
+	#set($tpUnit = 1048576)
+#else
+	#set($tpUnit = 1024)
+#end
+
+
+select
+	rawTable.IMSI,
+	##if can't find a match, use the TAC for manufacturer and marketing_name
+	##merge columns
+	MANU_MODEL = (tacref.MANUFACTURER ||','|| tacref.Marketing_Name ||','|| rawTable.TAC),
+	convert(numeric(16,4), sum(convert(numeric(16,2), rawTable.DATAVOL_DL)/$tpUnit)) AS TOTAL_DATAVOL_DL,
+	convert(numeric(16,4), sum(convert(numeric(16,2), rawTable.DATAVOL_UL)/$tpUnit)) AS TOTAL_DATAVOL_UL
+from
+	#UNION_ALL_RAW_TABLES($rawDTTables "rawTable")
+    left outer join
+        dc.DIM_E_SGEH_TAC tacref
+    on(
+        rawTable.TAC = tacref.TAC
+    )
+	#if($isgroup)
+		,$groupTable AS temp_group
+	#end
+where
+	#GET_DATETIME_RANGE() AND
+	#if($isgroup)
+    	temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		#if(${type}==$TYPE_SGSN)
+		AND rawTable.SGSN_NAME = temp_group.$SGSN
+		#else
+		AND #GET_JOIN("rawTable" "temp_group" $joinKeys)
+		#end
+	#else
+		#if(${type}==$TYPE_SGSN)
+		rawTable.SGSN_NAME = :$SGSN
+		#else
+		#GET_COLUMNS_WHERE_BY_TABLE("rawTable" $columns)
+		#end
+	#end
+group by rawTable.IMSI, rawTable.tac,tacref.MANUFACTURER,tacref.Marketing_Name

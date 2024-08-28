@@ -1,0 +1,115 @@
+##
+## Subsession Business Intelligence - TAU and Handover Event Analysis
+##
+## Parameter:   IMSI or IMSI_GROUP, DATE_TIME range, EVENT_TYPE
+##
+## Author : eavidat
+## Date   : Mar 2011
+
+#DEFINE_CONSTANTS()
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+
+#set($columns=[$IMSI])
+
+#set($RAW_ERR_TABLES = $techPackTablesLTE.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTablesLTE.getSucTables())
+
+##EVENT_ID = 7 is L_HANDOVER. See DIM_E_LTE_EVENTTYPE
+##EVENT_ID = 8 is L_TAU event.See DIM_E_LTE_EVENTTYPE
+#if(${eventType} == $ApplicationConstants.L_TAU)
+	#set($eventID=8)	
+#elseif(${eventType} == $ApplicationConstants.L_HANDOVER)
+	#set($eventID=7)	
+#end
+
+#macro(EVENT_SPECIFIC_COLUMNS $raw)
+	#if(${eventType} == $ApplicationConstants.L_TAU)
+		,TAC
+	#elseif(${eventType} == $ApplicationConstants.L_HANDOVER)
+		,HIERARCHY_1, ${raw}.VENDOR
+	#end
+#end
+
+#macro(SELECT_X_AXIS_LABEL)
+	#if(${eventType} == $ApplicationConstants.L_TAU)
+		,DT.TAC || ','  ||  TU.EVENT_SUBTYPE_ID_DESC as TAC_AND_TAU
+	#else
+		,DT.HIERARCHY_1 || ','  || DT.VENDOR as ECELL
+	#end
+#end
+
+#macro(GROUPBY_X_AXIS_LABEL)
+	#if(${eventType} == $ApplicationConstants.L_TAU)
+		TAC_AND_TAU
+	#else
+		ECELL
+	#end
+#end
+
+#macro(USE_RAW_TABLES $rawTables $raw)
+	select 
+		EVENT_SUBTYPE_ID
+		#EVENT_SPECIFIC_COLUMNS($raw)	
+		#if($raw=="err")
+			,count(*) 	as err
+			,0  		as suc
+		#elseif($raw=="suc")
+			,0 			as err
+			,count(*)  	as suc
+		#end
+	from 
+		#if($isgroup||$ismsisdn)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES($rawTables $raw)
+			#if($isgroup)
+			,$groupTable groupref
+			#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			#end
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS($rawTables $raw $columns)
+		#end
+	where
+		EVENT_ID = ${eventID}
+		#if($isgroup)
+				and #GET_JOIN($raw "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+		#elseif($ismsisdn)
+				and #GET_JOIN($raw "msisdnMap" $joinKeys)
+				and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+		#end
+	group by
+		EVENT_SUBTYPE_ID
+		#EVENT_SPECIFIC_COLUMNS($raw)
+#end
+
+select
+	SUM(DT.err) as NO_OF_FAILURES,
+    SUM(DT.suc) as NO_OF_SUCCESSES
+	#SELECT_X_AXIS_LABEL()
+from       
+    (
+	#USE_RAW_TABLES($RAW_ERR_TABLES "err")
+		union all
+	#USE_RAW_TABLES($RAW_SUC_TABLES "suc")
+	)DT,
+	dc.DIM_E_LTE_EVENT_SUBTYPE TU
+where 
+    DT.EVENT_SUBTYPE_ID = TU.EVENT_SUBTYPE_ID
+	and TU.EVENT_ID= ${eventID}
+group by		
+	#GROUPBY_X_AXIS_LABEL()	

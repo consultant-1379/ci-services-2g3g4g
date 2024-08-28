@@ -1,0 +1,180 @@
+##=============================================================================
+##
+## Data volume Ranking
+##
+## Description: 
+## Data volume Ranking query that queries the aggregation/raw tables for ranking results
+##  
+## Velocity parameter:
+##
+## type : one of { TAC,APN,IMSI,SGSN,GGSN,QOS}
+##  
+## count : number of rows returned
+## techPackTables: see javadoc on TechPackTables
+## 
+##
+## ## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##  
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#if(${type}==$TYPE_IMSI)
+	#set($tpUnit = 1024)
+#else
+	#set($tpUnit = 1048576)
+#end
+#foreach($techPack in $techPackTables.getTechPacks())
+	#set($dtTables=$techPack.getDtTables())
+#end
+
+#set($dtSelectColumns = [])
+#foreach ($column in $columnsForDtQuery)
+	#if ( $velocityCount <= 1)
+			#set($isAdded = $dtSelectColumns.add($column))
+			#set($isAdded = $dtSelectColumns.add("DATAVOL_DL"))
+			#set($isAdded = $dtSelectColumns.add("DATAVOL_UL"))
+			#else
+			#set($isAdded = $dtSelectColumns.add($column))
+	#end
+#end
+
+#macro(SELECT_QOS_FROM_RAW_TABLES $rawview $rawTables)
+(select
+    QOS_MEANTPUT,
+    QOS_PEAKTPUT,
+    QOS_RELIABILITY,
+    QOS_DELAY,
+    QOS_PRECEDENCE,    
+    sum(isnull(DATAVOL_UL, 0)) as DATAVOL_UL,
+    sum(isnull(DATAVOL_DL, 0)) as DATAVOL_DL
+from (
+    #foreach( $sourceTable in $rawTables)    
+		#foreach( $index in ["1", "2", "3", "4", "5"])
+			select
+			Container_${index}_QOS_MEANTPUT as QOS_MEANTPUT,
+			Container_${index}_QOS_PEAKTPUT as QOS_PEAKTPUT,
+			Container_${index}_QOS_RELIABILITY as QOS_RELIABILITY,
+			Container_${index}_QOS_DELAY as QOS_DELAY,
+			Container_${index}_QOS_PRECEDENCE as QOS_PRECEDENCE,        
+			sum(isnull(Container_${index}_DV_UL, 0)) as DATAVOL_UL,
+			sum(isnull(Container_${index}_DV_DL, 0)) as DATAVOL_DL
+    from
+		$sourceTable
+    where
+        DATETIME_ID >= :dateFrom and DATETIME_ID < :dateTo
+        and Container_${index}_QOS_MEANTPUT is not null
+        and Container_${index}_QOS_PEAKTPUT is not null
+        and Container_${index}_QOS_RELIABILITY is not null
+        and Container_${index}_QOS_DELAY is not null
+        and Container_${index}_QOS_PRECEDENCE is not null
+    group by
+        QOS_MEANTPUT,
+        QOS_PEAKTPUT,
+        QOS_RELIABILITY,
+        QOS_DELAY,
+        QOS_PRECEDENCE
+     #if($velocityCount < 5)
+        union all
+    #end
+    #end   
+    #if($velocityCount < $rawTables.size())
+        union all
+    #end
+    #end
+) as src
+group by
+    QOS_MEANTPUT,
+    QOS_PEAKTPUT,
+    QOS_RELIABILITY,
+    QOS_DELAY,
+    QOS_PRECEDENCE) as $rawview
+#end
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+	rank() over (order by TOTAL_DATAVOL desc) as RANK,
+    #if (${type}==$TYPE_TAC)
+	tac.MANUFACTURER as MANUFACTURER, 
+    tac.Marketing_Name as Marketing_Name,
+	#elseif(${type}==$TYPE_QOS)
+	QOS_MEANTPUT = (qosMeantput.QOS_MEANTPUT_DESC ||'('|| temp_dt.QOS_MEANTPUT||')'),
+	QOS_PEAKTPUT = (qosPeaktput.QOS_PEAKTPUT_DESC ||'('|| temp_dt.QOS_PEAKTPUT||')'),
+	QOS_RELIABILITY = (qosReliability.QOS_RELIABILITY_DESC ||'('|| temp_dt.QOS_RELIABILITY||')'),
+	QOS_DELAY = (qosDelay.QOS_DELAY_DESC||'('||temp_dt.QOS_DELAY||')'),
+	QOS_PRECEDENCE = (qosPrecedence.QOS_PRECEDENCE_DESC||'('||temp_dt.QOS_PRECEDENCE||')'),
+    #end
+    #if(${type}!=$TYPE_QOS)
+	#GET_COLUMNS_BY_TABLE('temp_dt' $columnsForDtQuery)
+	#end
+	convert(numeric(16,3), SUM(convert(numeric(16,2), temp_dt.DATAVOL_DL)/$tpUnit)) as TOTAL_DATAVOL_DL,
+	convert(numeric(16,3), SUM(convert(numeric(16,2), temp_dt.DATAVOL_UL)/$tpUnit)) as TOTAL_DATAVOL_UL,
+	TOTAL_DATAVOL_DL+TOTAL_DATAVOL_UL as TOTAL_DATAVOL
+from
+	#if($useAggregationTables)
+		$dtTables temp_dt
+	#else
+		#if(${type}==$TYPE_QOS)
+			#SELECT_QOS_FROM_RAW_TABLES("temp_dt" $dtTables)
+		#else
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($dtTables "temp_dt" $dtSelectColumns)
+		#end
+	#end
+    #if (${type}==$TYPE_TAC)
+    left outer join
+        dc.DIM_E_SGEH_TAC tac
+    on(
+        temp_dt.TAC = tac.TAC
+    )
+	#elseif(${type}==$TYPE_APN)
+		 inner join
+	(select
+    	APN
+    from
+    	dc.DIM_E_SGEH_APN 
+    where
+	    LAST_SEEN >= :dateFromForApnRetention 
+    group by
+		APN
+    )as validapn(
+    	APN)
+    on(
+		temp_dt.APN = validapn.APN
+    )
+	#elseif(${type}==$TYPE_QOS)
+		,dc.DIM_E_GSN_QOS_DELAY qosDelay,
+		dc.DIM_E_GSN_QOS_MEANTPUT qosMeantput,
+		dc.DIM_E_GSN_QOS_PEAKTPUT qosPeaktput,
+		dc.DIM_E_GSN_QOS_PRECEDENCE qosPrecedence,
+		dc.DIM_E_GSN_QOS_RELIABILITY qosReliability
+	#end
+where
+	#if($useAggregationTables)
+		#GET_DATETIME_RANGE_BY_TABLE ("temp_dt")
+		and 
+	#end
+	#if(${type}==$TYPE_QOS)
+	temp_dt.QOS_DELAY = qosDelay.QOS_DELAY
+	and temp_dt.QOS_MEANTPUT = qosMeantput.QOS_MEANTPUT
+	and temp_dt.QOS_PEAKTPUT = qosPeaktput.QOS_PEAKTPUT
+	and temp_dt.QOS_PRECEDENCE = qosPrecedence.QOS_PRECEDENCE
+	and temp_dt.QOS_RELIABILITY = qosReliability.QOS_RELIABILITY
+	#else
+	#GET_NOT_NULL_COLUMNS_WHERE("temp_dt" $columnsForDtQuery)
+	#end
+group by
+    #GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING("temp_dt" $columnsForDtQuery)
+    #if (${type}==$TYPE_TAC)
+    ,TAC.MANUFACTURER
+    ,TAC.Marketing_Name
+	#elseif(${type}==$TYPE_QOS)
+	,qosDelay.QOS_DELAY_DESC
+	,qosMeantput.QOS_MEANTPUT_DESC
+	,qosPeaktput.QOS_PEAKTPUT_DESC
+	,qosPrecedence.QOS_PRECEDENCE_DESC
+	,qosReliability.QOS_RELIABILITY_DESC
+    #end

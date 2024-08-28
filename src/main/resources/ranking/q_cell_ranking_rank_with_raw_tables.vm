@@ -1,0 +1,97 @@
+##=============================================================================
+##
+## Ranking
+##
+## Description: 
+##  Query the raw tables for cell ranking information
+##   
+## Velocity parameter:
+##
+## count : number of rows returned
+##
+## ## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##  
+## CHANGELOG
+##
+##    17/06/2010 Move IMSI ranking out to a separate velocity template
+##    05/08/2010 ehaoswa -- Added 3G support 
+##
+## Changed: eavidat 26/10/2010 to replce raw view with raw tables (HM85658)
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#set($columns=[$RAT,$VENDOR,$BSC,$CELL] )
+#if (!((! $techPackTables) && ("$!techPackTables" == "")))
+	#set($sucTables=$techPackTables.getSucTables())
+#end
+
+
+
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by NO_OF_ERRORS desc) as RANK,
+    #GET_COLUMNS($columns)	    
+    count(*) as NO_OF_ERRORS    
+into 
+	    #err
+from 
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawErrTables() "err" $columns)         
+group by
+    #GET_COLUMNS_NO_COMMA_TRAILING($columns)
+order by
+    RANK;
+
+#if($csv == true)
+ SET TEMPORARY OPTION Temp_Extract_Name1 = 'csvFileName' ;
+#end
+
+select
+	err.RANK,    
+	ratref.RAT_DESC,    
+    #GET_COLUMNS_BY_TABLE('err' $columns)
+    err.NO_OF_ERRORS,
+    sum(isnull(NO_OF_SUCCESSES, 0)) as NO_OF_SUCCESSES
+from
+    #err err
+    left outer join    
+	    (#foreach ($rawSucTable in $TECH_PACK_LIST.getAllRawSucTables())    
+	    select 
+	       #GET_COLUMNS_BY_TABLE("suc" $columns)
+	       count(*) as NO_OF_SUCCESSES
+	    from
+	       dc.$rawSucTable suc,
+	       #err err
+	    where
+	       #GET_DATETIME_RANGE()
+	       and #GET_TAC_EXCLUSION()
+	       and #GET_JOIN("err" "suc" $columns)  
+	    group by
+	       #GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING("suc" $columns)
+		   #if($velocityCount < $TECH_PACK_LIST.getAllRawSucTables().size())
+					union all
+			#end
+		  #end
+	    ) as suc(#GET_COLUMNS($columns) NO_OF_SUCCESSES)
+	    on(
+	        #GET_JOIN("err" "suc" $columns)
+	    )	    
+	    
+	    ,dc.DIM_E_SGEH_RAT ratref
+where        
+    err.RAT = ratref.RAT
+        
+group by
+    err.RANK,    
+	ratref.RAT_DESC,    
+    #GET_COLUMNS_BY_TABLE('err' $columns)
+    err.NO_OF_ERRORS
+order by
+    err.RANK
+asc

@@ -1,0 +1,18 @@
+##=============================================================================
+##
+## Cause code query returning all codes for the cause code table
+##
+##
+##
+## 12-10-2010 estepdu Update for FOA issue to only select GTP i.e. DIM_E_SGEH_CAUSE_PROT_TYPE GTP =1
+## 
+##=============================================================================
+select
+    cause_code,
+	cause_code_desc,
+	cause_code_help
+from
+    dc.DIM_E_SGEH_CAUSECODE 
+    where CAUSE_PROT_TYPE = 1
+order by
+    cause_code

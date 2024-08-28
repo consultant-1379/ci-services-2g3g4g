@@ -1,0 +1,52 @@
+##
+## Device Analysis - device group highest datavol drilldown
+##
+## Description: 
+##
+##     Drilldown by device group for highest datavol analysis
+##
+## Velocity Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for dt/dtpdp part of the query
+##
+## Named PreparedStatement Parameters:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##    :groupColumn - group name
+##
+
+
+#DEFINE_CONSTANTS()
+#set($isgroup=true)
+#set($isGroupDrilldown=true)
+#set($tpUnit = 1024)
+select         
+    isnull(a.TAC, b.TAC) as TAC,
+    tacref.MANUFACTURER,
+    isnull(tacref.Marketing_Name, convert(varchar(12),TAC)) as Marketing_Name,
+	convert(numeric(16,3), SUM(isnull(convert(numeric(16,2), a.DATAVOL_DL), 0)/$tpUnit)) as TOTAL_DATAVOL_DL,
+	convert(numeric(16,3), SUM(isnull(convert(numeric(16,2), a.DATAVOL_UL), 0)/$tpUnit)) as TOTAL_DATAVOL_UL,
+	TOTAL_DATAVOL_DL+TOTAL_DATAVOL_UL as TOTAL_DATAVOL,
+    MAX(isnull(BEARER_COUNT,0))as TOTAL_BEARER_COUNT
+from
+    #SUM_TAC_DATAVOLS($useAggregationTables $DTPUT_AGGREGATION_TABLES $rawDtputTables $isgroup $isGroupDrilldown)as a(TAC, DATAVOL_UL,DATAVOL_DL)
+    full outer join	
+	#SUM_TAC_BEARERVOLS($useAggregationTables $DTPUT_AGGREGATION_TABLES $rawDtputTables $isgroup $isGroupDrilldown)as b(TAC, BEARER_COUNT)
+    on(
+        a.TAC = b.TAC
+    )
+    left outer join
+        dc.DIM_E_SGEH_TAC tacref
+    on(
+        tacref.TAC=isnull(a.TAC, b.TAC)
+    )
+group by
+    TAC,
+    tacref.MANUFACTURER,
+    tacref.MARKETING_NAME
+order by
+	TOTAL_DATAVOL

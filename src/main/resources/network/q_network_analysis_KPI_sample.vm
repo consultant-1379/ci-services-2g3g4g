@@ -1,0 +1,286 @@
+##=============================================================================
+##
+## Network Analysis : KPI
+##
+## Description:
+##
+##   Get the successful and failure events from separate tables/views and join the result to display KPI##
+##
+## Velocity Parameters:
+##
+## type : one of { APN, BSC, CELL, SGSN, TAC}
+##
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##
+##     TR_1 : normally query against raw events
+##     TR_2 : normally query against 1min agg
+##     TR_3 : normally query against 15min agg
+##     TR_4 : normally query against daily agg
+##
+## count : plot of time serial
+##
+## interval : interval between every two plots
+##i
+## starttime : starting time of the time serial
+##
+## Named Prepared Statement Parameters:
+##
+##     :dateFrom starting time
+##     :dateTo   ending time
+##
+##     :column1
+##     :column2
+##     :column3  search keys    
+##
+## Author: exuexie 14/07/2010
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#**
+ * For use in the q_network_analysis_KPI_sample.vm, where special consideration is required for MANUFACTURER queries,
+ * as the MANUFACTURER column exists in multiple tables
+ *
+ * If type is MANUFACTURER, this method will return will return 
+ *		tac.MANUFACTURER,
+ * otherwise, it just calls #GET_COLUMNS
+ *
+ * Note, not passign in $columns in as a parameter - doing so causes weird SQL errors, and it seems to pick
+ * up on the value of $columns anyhow
+ *
+ * @param $type 
+ *#
+#macro(GET_TAC_MANUFACTURER_OR_PLAIN_GET_COLUMNS $type)
+	#if($type==$ApplicationConstants.TYPE_MAN)
+		tac.MANUFACTURER,
+	#else
+		#GET_COLUMNS($columns)
+	#end
+#end
+
+#**
+ * For use in the q_network_analysis_KPI_sample.vm, where special consideration is required for MANUFACTURER queries,
+ * as the MANUFACTURER column exists in multiple tables
+ *
+ * If type is MANUFACTURER, this method will return will return
+ *		tac.MANUFACTURER=:MANUFACTURER and $shortTableName.TAC = tac.TAC
+ * otherwise, it just calls #GET_COLUMNS_WHERE
+ *
+ * Note, not passign in $columns in as a parameter - doing so causes weird SQL errors, and it seems to pick
+ * up on the value of $columns anyhow
+ *
+ * @param $type
+ * @param $eventTableName
+ *#
+
+#set($isone=true)
+#set($isfifteen=true)
+#set($isday=true)
+
+#if(${type}==$TYPE_APN)
+#set($columns=[$APN])
+#set($agg_t="EVENT_E_SGEH_APN_EVENTID")
+#elseif (${type}==$TYPE_TAC)
+#set($columns=[$TAC])
+#set($agg_t="EVENT_E_SGEH_MANUF_TAC_EVENTID")
+#set($isone=false)
+#elseif(${type}==$ApplicationConstants.TYPE_MAN)
+#set($columns=[$ApplicationConstants.TYPE_MAN])
+#set($agg_t="EVENT_E_SGEH_MANUF_TAC_EVENTID")
+#set($isone=false)
+#elseif(${type}==$TYPE_SGSN)
+#set($columns=[$SGSN])
+#set($agg_t="EVENT_E_SGEH_EVNTSRC_EVENTID")
+#elseif(${type}==$TYPE_BSC)
+#set($columns=[$RAT,$VENDOR, $BSC])
+#set($agg_t="EVENT_E_SGEH_VEND_HIER3_EVENTID")
+#elseif(${type}==$TYPE_CELL)
+#set($columns=[$RAT,$VENDOR, $BSC,$CELL])
+#set($agg_t="EVENT_E_SGEH_VEND_HIER321_EVENTID")
+#set($isone=false)
+#end
+
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+
+
+#if((${useTACExclusion})&&((${timerange}==$ApplicationConstants.ONE_MINUTE && $isone) || (${timerange}==$ApplicationConstants.FIFTEEN_MINUTES && $isfifteen) || (${timerange} == $ApplicationConstants.DAY && $isday)))
+    #set($errview = "dc.${agg_t}_ERR${time}")
+    #set($sucview = "dc.${agg_t}_SUC${time}")
+    #set($isagg = true)
+#else
+    #set($errview = "dc.EVENT_E_SGEH_ERR_RAW")
+    #set($sucview = "dc.EVENT_E_SGEH_SUC_RAW")
+    #set($isagg = false)
+#end
+#set($subview = "dc.EVENT_E_SGEH_ERR_RAW")
+
+
+#if(${timerange}==$ApplicationConstants.ONE_MINUTE)
+#set($interval=1)
+#elseif(${timerange}==$ApplicationConstants.FIFTEEN_MINUTES)
+#set($interval=15)
+#elseif($${timerange}==$ApplicationConstants.DAY)
+#set($interval=1440)
+#else
+#set($interval=1)
+#end
+
+SELECT
+	dateformat(tmp_st, 'yyyy-mm-dd hh:mm:ss.S') as TS,
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=0 then (cast (round((isnull((isnull(NO_OF_SUCCESSES,0) )/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2))) end),0)) as 'Attach SUCCESSES Rate',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=1 then (cast (round((isnull((isnull(NO_OF_SUCCESSES,0) )/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2))) end),0)) as 'PDP Context Activation SUCCESSES Rate',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=2  then (cast (round((isnull((isnull(NO_OF_SUCCESSES,0) )/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2))) end),0)) as 'Routing Area Update SUCCESSES Rate',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=3  then (cast (round((isnull((isnull(NO_OF_SUCCESSES,0) )/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2))) end),0)) as 'Inter SGSN Routing Area Update SUCCESSES Rate',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=4 then #CALCULATE_PERCENTAGE(["err.NO_OF_NET_INIT_DEACTIVATES","suc.NO_OF_NET_INIT_DEACTIVATES"] ["NO_OF_ERRORS", "NO_OF_SUCCESSES"]) end),0)) as 'PDP Context cutoff Ratio',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=14 then (cast (round((isnull((isnull(NO_OF_SUCCESSES,0) )/cast(isnull(NO_OF_ERRORS,0) + isnull(NO_OF_SUCCESSES,0) as float),0))*100, 2) as numeric(5,2))) end),0)) as 'Detach SUCCESSES Rate',
+	max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=15 then (cast (round((isnull((  isnull(NO_OF_ERRORS,0) )/cast(   isnull(NO_OF_ERRORS,0)   + isnull(NO_OF_SUCCESSES,0)  as float),0))*100, 2) as numeric(5,2))) end),0)) as 'Service Request Failure Ratio',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=15 then (cast (round((isnull((  isnull(err.NO_OF_PAGING_ATTEMPTS,0) )/cast(   isnull(err.NO_OF_PAGING_ATTEMPTS,0)   + isnull(suc.NO_OF_PAGING_ATTEMPTS,0)  as float),0))*100, 2) as numeric(5,2))) end),0)) 'Paging Failure Ratio',
+    max(isnull((case when isnull(err.EVENT_ID, suc.EVENT_ID)=15 then (cast(round((isnull(err.NO_OF_PAGING_ATTEMPTS, 0)/ sub.NO_OF_TOTAL_ERR_SUBSCRIBERS),2) as numeric(5,2))) end),0)) as 'Paging attempts per err subscriber',
+	
+	max(isnull(NO_OF_TOTAL_ERR_SUBSCRIBERS, 0)) as NO_OF_TOTAL_ERR_SUBSCRIBERS
+FROM
+    (select
+		chart_times.tmp_st,
+        #GET_COLUMNS($columns)
+        EVENT_ID,
+		#if($isagg)
+        sum(isnull(NO_OF_ERRORS,0)),
+        sum(isnull(NO_OF_NET_INIT_DEACTIVATES,0)),
+        sum(isnull(NO_OF_PAGING_ATTEMPTS,0))
+		#else
+		count(*),
+        sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end),
+        sum(isnull(PAGING_ATTEMPTS,0))
+		#end
+    from
+		#if($isagg)
+			$errview temp_err,
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_OPTIONAL_TAC_EXCLUSION($RAW_ERR_TABLES "temp_err"),
+		#end
+		#GET_CHART_TIMES($starttime $endtime $interval),
+		#if($type==$ApplicationConstants.TYPE_MAN && !$isagg)
+			dc.DIM_E_SGEH_TAC,
+		#end
+    where
+        #GET_COLUMNS_WHERE($columns)
+		#if($type==$ApplicationConstants.TYPE_MAN && !$isagg)
+			and dc.DIM_E_SGEH_TAC.TAC = temp_err.tac
+		#end        
+		#if($isagg)
+        and DATETIME_ID >= tmp_st
+		and DATETIME_ID < tmp_et
+        #end
+	group by
+		--tmp_st,
+		chart_times.tmp_st,
+        #GET_COLUMNS($columns)
+        EVENT_ID
+	having
+		EVENT_ID is not null
+    )as err (
+        DATETIME_ID,
+        #GET_COLUMNS($columns)
+        EVENT_ID,
+        NO_OF_ERRORS,
+        NO_OF_NET_INIT_DEACTIVATES,
+        NO_OF_PAGING_ATTEMPTS
+    )
+    full outer join
+    (select
+        chart_times.tmp_st,
+		#GET_COLUMNS($columns)
+        EVENT_ID,
+		#if($isagg)
+        sum(isnull(NO_OF_SUCCESSES,0)),
+        sum(isnull(NO_OF_NET_INIT_DEACTIVATES,0)),
+        sum(isnull(NO_OF_PAGING_ATTEMPTS,0))
+		#else
+		        count(*),
+        sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end),
+        sum(isnull(PAGING_ATTEMPTS,0))
+		#end
+    from
+		#if($isagg)
+			$sucview temp_suc,
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_OPTIONAL_TAC_EXCLUSION($RAW_SUC_TABLES "temp_suc"),
+		#end
+		#GET_CHART_TIMES($starttime $endtime $interval),
+		#if($type==$ApplicationConstants.TYPE_MAN && !$isagg)
+			dc.DIM_E_SGEH_TAC,
+		#end
+    where
+        #GET_COLUMNS_WHERE($columns)
+		#if($type==$ApplicationConstants.TYPE_MAN && !$isagg)
+			and dc.DIM_E_SGEH_TAC.TAC = temp_suc.tac
+		#end
+		#if($isagg)
+        and DATETIME_ID >= tmp_st
+		and DATETIME_ID < tmp_et
+        #end
+	group by
+		--tmp_st,
+        chart_times.tmp_st,
+		#GET_COLUMNS($columns)
+        EVENT_ID
+	having
+		EVENT_ID is not null
+    ) as suc(
+        DATETIME_ID,
+        #GET_COLUMNS($columns)
+        EVENT_ID,
+        NO_OF_SUCCESSES,
+        NO_OF_NET_INIT_DEACTIVATES,
+        NO_OF_PAGING_ATTEMPTS
+    )
+    on (
+        #GET_JOIN("err" "suc" ["DATETIME_ID","EVENT_ID"])
+        and #GET_JOIN("err" "suc" $columns)
+    )
+    full outer join
+    (select
+        chart_times.tmp_st,
+		#GET_TAC_MANUFACTURER_OR_PLAIN_GET_COLUMNS_AS( $type ),
+		IMSI_COUNT from(
+		select
+            DATETIME_ID,
+            count(distinct(IMSI))
+    from (
+        #GET_ALL_IMSIS_FOR_PERIOD($RAW_ERR_TABLES "temp_sub" $interval)
+    ) as RAW_DATA(
+        DATETIME_ID,
+        IMSI
+    )
+    GROUP BY DATETIME_ID
+    ) as tmp(
+        DATETIME_ID,
+        IMSI_COUNT
+    ),#GET_CHART_TIMES($starttime $endtime $interval)
+    where
+        DATETIME_ID = tmp_st
+    ) as sub
+    (
+    DATETIME_ID,
+
+    #if($type==$ApplicationConstants.TYPE_MAN)
+        MANUFACTURER,
+    #else
+        #GET_COLUMNS($columns)
+    #end
+    NO_OF_TOTAL_ERR_SUBSCRIBERS
+    )
+    on(
+        #GET_MULTI_JOIN(["err","suc"] "sub" ["DATETIME_ID"])
+        and #GET_MULTI_JOIN(["err","suc"] "sub" $columns)
+    )
+	right outer join
+    #GET_CHART_TIMES($starttime $endtime $interval)
+    on(
+       chart_times.tmp_st = isnull(suc.DATETIME_ID, err.DATETIME_ID)
+      )    
+group by
+    TS
+order by
+    TS 

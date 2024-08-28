@@ -1,0 +1,80 @@
+##
+## Device Analysis - device types summary
+##
+## Description: 
+##
+##     Get the device types summary
+##
+## Velocity Parameter: 
+##
+## AGGREGATION_TABLES : a TechPackTables object containing the Aggregation views applicable for time range
+## RAW_TABLES : a TechPackTables object containing the Raw tables applicable for this time range
+## useAggregationTables : a boolean indicating whether to use the aggregation tables or raw tables 
+## for error/success part of the query
+##
+## count : number of the top<> most popular device types
+##
+## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##    :TAC - nominated TAC
+##
+## Scenarios:
+##
+##  1. Device summary
+##  
+##     timerange
+##     :dateFrom   :dateTo   :TAC
+##
+##  2. Most popular device summary
+## 
+##     timerange, count
+##     :dateFrom   :dateTo
+##
+
+#DEFINE_CONSTANTS()
+
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+    rank() over (order by OCCURRENCES desc) as RANK,             
+    isnull(err.TAC, suc.TAC) as TAC,
+    tacref.MANUFACTURER as MANUFACTURER,
+    isnull(tacref.Marketing_Name, convert(varchar(12),TAC)) as Marketing_Name,        
+    sum(isnull(NO_OF_ERRORS, 0)) as NO_OF_ERRORS,
+    sum(isnull(NO_OF_SUCCESSES,0)) as NO_OF_SUCCESSES,
+    NO_OF_ERRORS+NO_OF_SUCCESSES as OCCURRENCES,
+    cast(isnull(round(NO_OF_SUCCESSES/cast(OCCURRENCES as float) * 100, 2),0) as numeric(5,2)) as SUCCESS_RATIO,
+	tacref.Band as Band
+from
+    (
+		select
+			TAC,    
+			count(*)        
+		from 		
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($RAW_TABLES.getErrTables() "temp_err" ["TAC"])		
+		group by
+			TAC
+    ) as err(TAC, NO_OF_ERRORS)
+    full outer join
+    (
+		#SUM_TAC_SUCCESSES("true" $AGGREGATION_TABLES $RAW_TABLES) 
+    ) as suc(TAC, NO_OF_SUCCESSES)
+    on(
+        suc.TAC = err.TAC
+    )
+    left outer join
+    dc.DIM_E_SGEH_TAC tacref
+    on(
+        tacref.TAC=isnull(suc.TAC, err.TAC)
+    )
+group by
+    TAC,
+    MANUFACTURER,
+    MARKETING_NAME,
+	Band
+order by
+    RANK

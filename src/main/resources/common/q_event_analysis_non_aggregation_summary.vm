@@ -1,0 +1,184 @@
+##=============================================================================
+##
+## Network Analysis : failure analysis for queries that go directly to the raw tables
+##
+## type : one of {CELL, TAC}
+##
+## timerange : one of { TR_2}
+##
+##     TR_2 : normally query against 1min agg
+##
+##
+##=============================================================================
+
+##-----------------------------------------------------------------------------
+## Put together selects from aggregation tables for the event analysis summary view
+##
+## tableName tableName in question
+##-----------------------------------------------------------------------------
+#macro(PRINT_COLUMN_IF_NOT_ALREADY_INCLUDED $columnName $existingColumns)	
+	#if (!$existingColumns.contains($columnName))
+		$columnName,
+	#end
+#end	
+
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+
+#if(${type}==$TYPE_APN)
+#set($columns=[$APN])
+#set($columnsToSelect=[$APN,"EVENT_ID","IMSI","DEACTIVATION_TRIGGER","TAC"])
+#elseif (${type}==$TYPE_TAC)
+#set($columns=[$TAC])
+#set($columnsToSelect=[$TAC,"EVENT_ID","IMSI","DEACTIVATION_TRIGGER"])
+#elseif(${type}==$TYPE_SGSN)
+#set($columns=[$SGSN])
+#set($columnsToSelect=[$SGSN,"EVENT_ID","IMSI","DEACTIVATION_TRIGGER","TAC"])
+#elseif(${type}==$TYPE_BSC)
+#set($columns=[$RAT,$VENDOR,$BSC])
+#set($columnsToSelect=[$RAT,$VENDOR,$BSC,"EVENT_ID","DEACTIVATION_TRIGGER","IMSI","TAC"])
+#elseif(${type}==$TYPE_CELL)	
+	#set($columns=[$RAT,$VENDOR,$BSC,$CELL])
+	#set($columnsToSelect=[$RAT,$VENDOR,$BSC,$CELL,"EVENT_ID", "IMSI", "DEACTIVATION_TRIGGER", "TAC"])
+#end
+
+#set($RAW_COLLATION_NAME='raw')
+#set($columnsToIncludeInDTView=["SUM(DATAVOL_UL)","SUM(DATAVOL_DL)"])
+#set($columnsToIncludeInDTPDPView=["count(*)"])
+##appearances and names to the contrary, this query is used for group queries
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#set($dtViewName="temp_dt")
+#set($dtPdpViewName="temp_dtpdp")
+#set($sucViewName="a")
+#set($errViewName="b")
+#set($rawDTTables= $TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_GSN_DT_TPNAME).getRawTables())
+#set($rawDTPDPTables= $TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_GSN_DTPDP_TPNAME).getRawTables())
+
+
+select
+	#if (${type}==$TYPE_TAC)
+		tac.MANUFACTURER as MANUFACTURER,
+		tac.Marketing_Name as Marketing_Name,
+	#end
+    #GET_NOT_NULL_COLUMN(["a","b"] $columnsForQuery)
+    isnull(a.EVENT_ID,b.EVENT_ID) as EVENT_ID,
+    isnull(c.EVENT_ID_DESC, lteEventType.EVENT_ID_DESC) as EVENT_ID_DESC,	
+    isnull(NO_OF_ERRORS, 0) as NO_OF_ERRORS,
+    isnull(NO_OF_SUCCESSES,0) as NO_OF_SUCCESSES,
+    NO_OF_ERRORS + NO_OF_SUCCESSES as OCCURRENCES,
+    #CALCULATE_KPI_RATIO("c" "a" "b")    
+    ,
+    isnull(NO_OF_TOTAL_ERR_SUBSCRIBERS, 0) as NO_OF_TOTAL_ERR_SUBSCRIBERS,
+	#SELECT_COLUMNS_2G3G_EVENT_ANALYSIS_SUMMARY_VIEW($dtAggTabels $dtPdpAggTabels $rawDTTables $rawDTPDPTables $dtViewName $dtPdpViewName)	
+from
+    (select
+        #GET_COLUMNS_BY_TABLE( $RAW_COLLATION_NAME $columnsForQuery)
+        EVENT_ID,
+        count(*),
+        sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end),count(distinct(${RAW_COLLATION_NAME}.IMSI))
+    from       		
+	  	#if($isgroup)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawErrTables() $RAW_COLLATION_NAME $columnsToSelect)
+			,$groupTable temp_group
+		where
+			temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			and #GET_JOIN($RAW_COLLATION_NAME "temp_group" $joinKeys)
+			and #GET_TAC_EXCLUSION()
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawErrTables() $RAW_COLLATION_NAME $columnsForQuery $columnsToSelect)
+			#if(${useTACExclusion})
+				where
+					#GET_TAC_EXCLUSION()
+			#end
+		#end
+    group by
+        EVENT_ID,
+       #GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING($RAW_COLLATION_NAME $columnsForQuery)
+	having
+		EVENT_ID is not null
+    ) as a (
+        #GET_COLUMNS($columnsForQuery)
+        EVENT_ID, NO_OF_ERRORS, NO_OF_NET_INIT_DEACTIVATES, NO_OF_TOTAL_ERR_SUBSCRIBERS)
+    full outer join
+    (select
+        #GET_COLUMNS_BY_TABLE( $RAW_COLLATION_NAME $columnsForQuery)
+        EVENT_ID,
+        count(*),
+        sum(case when (DEACTIVATION_TRIGGER != 1) then 1 else 0 end)
+    from
+		#if($isgroup)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawSucTables() $RAW_COLLATION_NAME $columnsToSelect)
+			,$groupTable temp_group
+		where
+			temp_group.$groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM			
+			and #GET_JOIN($RAW_COLLATION_NAME "temp_group" $joinKeys)
+			and #GET_TAC_EXCLUSION()
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($TECH_PACK_LIST.getAllRawSucTables() $RAW_COLLATION_NAME $columnsForQuery $columnsToSelect)		
+			#if(${useTACExclusion})
+				where
+					#GET_TAC_EXCLUSION()
+			#end
+		#end			
+    group by
+        EVENT_ID,
+        #GET_COLUMNS_BY_TABLE_NO_COMMA_TRAILING($RAW_COLLATION_NAME $columnsForQuery)	   
+	having
+		EVENT_ID is not null   
+    ) as b (
+        #GET_COLUMNS($columnsForQuery)
+        EVENT_ID, NO_OF_SUCCESSES, NO_OF_NET_INIT_DEACTIVATES)
+    on (
+        #GET_JOIN ('a' 'b' $columnsForQuery)
+        and a.EVENT_ID = b.EVENT_ID
+    )
+    left outer join
+        dc.DIM_E_SGEH_EVENTTYPE c
+    on(
+      c.EVENT_ID=isnull(a.EVENT_ID, b.EVENT_ID)	
+	  #if($eventID)
+		and c.EVENT_ID = :eventID
+	  #end
+    )
+	left outer join
+		dc.DIM_E_LTE_EVENTTYPE lteEventType
+	on(
+		lteEventType.EVENT_ID=isnull(a.EVENT_ID, b.EVENT_ID)
+	    #if($eventID)
+			and lteEventType.EVENT_ID = :eventID
+		#end
+	)
+	#if (${type}==$TYPE_TAC)
+		left outer join
+			dc.DIM_E_SGEH_TAC tac
+		on(
+			tac.TAC=isnull(a.TAC, b.TAC)
+		)
+	#end	
+	#JOIN_2G3G_TABLES_EVENT_ANALYSIS_SUMMARY_VIEW($dtAggTables $dtPdpAggTables $rawDTTables $rawDTPDPTables $dtViewName $dtPdpViewName $columns $columnsToIncludeInDTView $columnsToIncludeInDTPDPView)
+where
+	EVENT_ID_DESC <> ''
+group by 
+    EVENT_ID,
+    EVENT_ID_DESC,
+	#GET_COLUMNS($columnsForQuery)
+	NO_OF_ERRORS,
+	NO_OF_SUCCESSES,
+	NO_OF_TOTAL_ERR_SUBSCRIBERS
+	#if (${type}==$TYPE_TAC)
+		,
+	MANUFACTURER,
+	Marketing_Name
+	#end
+having
+	EVENT_ID between 0 and 255
+    ##EVENT_ID is a tinyint in database

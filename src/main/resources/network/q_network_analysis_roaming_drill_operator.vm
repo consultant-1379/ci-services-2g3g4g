@@ -1,0 +1,49 @@
+##=============================================================================
+##
+## Network analysis : Roaming failure events  grouy by event id
+##
+## Description: 
+##
+##        count number of failures roaming event and impacted roaming subscriber
+##
+## NOTE:
+##
+##     roaming agg has no eventid ,so need to go to raw_err table
+##
+##   @author: ezhelao
+## 
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($columnsToIncludeInNewView=["EVENT_ID","IMSI", "IMSI_MCC", "IMSI_MNC"])
+
+
+select
+    EVENT_ID_DESC,
+    grouped_result.EVENT_ID ,
+    NO_OF_ERRORS,
+    IMPACTED_SUBSCRIBERS,
+    :OPERATOR,
+    :MCC,
+    :MNC
+from
+
+
+(select EVENT_ID,
+       count(*) as NO_OF_ERRORS ,
+       count (distinct(IMSI)) as IMPACTED_SUBSCRIBERS
+from
+
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_AND_ROAMING_MCC_MNC($TECH_PACK_LIST.getAllRawErrTables() "rawview" $columnsToIncludeInNewView)
+group by
+    EVENT_ID
+)   as grouped_result
+left outer join
+(
+select * from DIM_E_SGEH_EVENTTYPE
+union all
+select * from DIM_E_LTE_EVENTTYPE
+) as type_dim
+on
+  (
+        grouped_result.EVENT_ID= type_dim.EVENT_ID
+  )

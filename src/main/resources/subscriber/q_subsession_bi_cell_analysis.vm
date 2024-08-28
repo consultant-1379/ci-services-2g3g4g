@@ -1,0 +1,123 @@
+##
+## Subsession Business Intelligence - Cell analysis
+##
+## Description: 
+##
+##     Summary data for each cell the user was in within the time period.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range
+##
+## Author : ehaoswa 
+## Date   : Aug 2010
+##
+## Changes:
+## by eavidat on 10/11/10 for updating performance (using RAW tables instead of RAW view)
+
+#DEFINE_CONSTANTS()
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+#set($columns=[$RAT,$VENDOR,$BSC,$CELL])
+#set($columnsToSelect=["RAT","VENDOR","HIERARCHY_3","HIERARCHY_2","HIERARCHY_1","EVENT_ID","IMSI"])
+
+#if(${groupDefinitions})
+    #set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+    #set($groupTable = $groupDef.getTableName())
+    #set($groupnameColumn = $groupDef.getGroupNameColumn())
+    #set($joinKeys = $groupDef.getGroupKeys())
+    #set($isgroup=true)
+    #set($columnsToSelect=["RAT","VENDOR","HIERARCHY_3","HIERARCHY_2","HIERARCHY_1","COUNT(*) as cnt"])
+#else
+    #set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+    #set($ismsisdn=true)
+    #set($joinKeys=["IMSI"])
+#end
+
+#set($imsiColumn=[$IMSI])
+
+select
+#if($count > 0)
+top $count
+#end
+sum(no_of_failures) as NO_OF_FAILURES_PER_CELL,
+sum(no_of_success) as NO_OF_SUCCESSES_PER_CELL,
+HIERARCHY_1 + ','  + HIERARCHY_2 + ',' +
+HIERARCHY_3 + ','  +
+VENDOR + ','  +
+convert (char(1), DT.RAT)
+from
+(
+select
+RAT,
+err.VENDOR,
+HIERARCHY_3,
+HIERARCHY_2,
+HIERARCHY_1,
+#if($isgroup)
+sum(cnt) as no_of_failures,
+#else
+count(*) as no_of_failures,
+#end
+0 as no_of_success
+from
+#if($isgroup)
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS_CELL_ANALYSIS($RAW_ERR_TABLES $groupTable $groupnameColumn $joinKeys "err" $columnsToSelect)
+#elseif($ismsisdn)
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $columnsToSelect)
+,dc.DIM_E_IMSI_MSISDN msisdnMap
+where
+    #GET_JOIN("err" "msisdnMap" $joinKeys)
+AND msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+#else
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $imsiColumn $columnsToSelect)
+#end
+group by
+RAT,
+err.VENDOR,
+HIERARCHY_3,
+HIERARCHY_2,
+HIERARCHY_1
+union all
+select
+RAT,
+suc.VENDOR,
+HIERARCHY_3,
+HIERARCHY_2,
+HIERARCHY_1,
+#if($isgroup)
+sum(cnt) as no_of_success,
+#else
+count(*) as no_of_success,
+#end
+0 as no_of_failures
+from
+#if($isgroup)
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS_CELL_ANALYSIS($RAW_SUC_TABLES $groupTable $groupnameColumn $joinKeys "suc" $columnsToSelect)
+#elseif($ismsisdn)
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "suc" $columnsToSelect)
+,dc.DIM_E_IMSI_MSISDN msisdnMap
+where
+    #GET_JOIN("suc" "msisdnMap" $joinKeys)
+AND msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+#else
+    #REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $imsiColumn $columnsToSelect)
+#end
+group by
+RAT,
+suc.VENDOR,
+HIERARCHY_3,
+HIERARCHY_2,
+HIERARCHY_1
+) DT
+group by
+DT.RAT,
+DT.VENDOR,
+DT.HIERARCHY_3,
+HIERARCHY_2,
+DT.HIERARCHY_1
+having
+#GET_NOT_NULL_COLUMNS_WHERE("DT" $columns)
+order by
+NO_OF_FAILURES_PER_CELL desc

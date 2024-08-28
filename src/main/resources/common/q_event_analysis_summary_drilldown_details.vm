@@ -1,0 +1,83 @@
+##=============================================================================
+##
+## Event analysis: KPI ratio detailed query
+## -----------------------------------
+##
+## List events for event summary drilldown
+##
+## Velocity Parameter:
+##
+## type : one of {SGSN, BSC, CELL, APN}
+##
+## key : one of {SUC, ERR, TOTAL}
+##
+##
+## Author: exuexie 13/07/2010
+## Changed by ehaoswa 28/07/2010
+##
+## Changed by eavidat 14/04/2011 4G support
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+
+#if(${type}==$TYPE_APN)
+    #if(${drilltype}==$CAUSE_CODE)
+    #set($columns=[$RAT,$APN, $SGSN, $VENDOR,$BSC, $CELL, $CAUSE_CODE])
+    #else
+    #set($columns=[$RAT,$APN, $SGSN, $VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+    #end
+#elseif(${type}==$TYPE_SGSN)
+    #if(${drilltype}==$CAUSE_CODE)
+    #set($columns=[$RAT,$SGSN, $VENDOR,$BSC, $CELL, $CAUSE_CODE])
+    #else
+    #set($columns=[$RAT,$SGSN, $VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+    #end
+#elseif(${type}==$TYPE_BSC)
+    #if(${drilltype}==$CAUSE_CODE)
+    #set($columns=[$RAT,$VENDOR,$BSC, $CELL, $CAUSE_CODE])
+    #else
+    #set($columns=[$RAT,$VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+    #end
+#elseif(${type}==$TYPE_CELL)
+    #if(${drilltype}==$CAUSE_CODE)
+    #set($columns=[$RAT,$VENDOR,$BSC, $CELL, $CAUSE_CODE])
+    #else
+    #set($columns=[$RAT,$VENDOR,$BSC, $CELL, $CAUSE_CODE, $SUBCAUSE_CODE])
+    #end
+#end
+
+#macro(WHERE_ADDON_FOR_EVENT_ANALYSIS_SUMMARY_DRILL)
+	and rawview.EVENT_ID = :$ApplicationConstants.EVENT_ID_PARAM 
+#end
+
+#macro(EVENT_ANALYSIS_SUMMARY_DRILL_QUERY $networkType $tablesToUseInQuery)
+(
+	#EVENT_ANALYSIS_SELECT($isgroup $ApplicationConstants.KEY_TYPE_TOTAL $networkType)
+	
+	#EVENT_ANALYSIS_FROM($isgroup $networkType $groupTable)
+	,#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS($tablesToUseInQuery "rawview" $columns)
+	
+	#EVENT_ANALYSIS_WHERE($type $networkType)
+	#WHERE_ADDON_FOR_EVENT_ANALYSIS_SUMMARY_DRILL()
+)
+#end
+
+select
+	#RAW_EVENT_ANALYSIS_COLUMNS($count $isgroup $ApplicationConstants.KEY_TYPE_TOTAL)
+from 
+(
+#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+	#EVENT_ANALYSIS_SUMMARY_DRILL_QUERY ($ApplicationConstants.SGEH $rawNonLteTables)
+#end
+#if($rawLteTables.size() > 0 && $useLteTables)
+	#if($rawNonLteTables.size() > 0 && $useNonLteTables)
+		union all
+	#end
+	#EVENT_ANALYSIS_SUMMARY_DRILL_QUERY ($ApplicationConstants.LTE $rawLteTables)	
+#end
+)
+EVENT_ANALYSIS_RESULT 
+order by DATETIME_ID desc

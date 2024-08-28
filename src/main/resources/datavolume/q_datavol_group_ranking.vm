@@ -1,0 +1,107 @@
+##=============================================================================
+##
+## Data volume group Ranking
+##
+## Description: 
+## Data volume Ranking query that queries the aggregation/raw tables for group ranking results
+##  
+## Velocity parameter:
+##
+## type : one of {TAC,APN,IMSI,SGSN}
+##  
+## count : number of rows returned
+## techPackTables: see javadoc on TechPackTables
+## 
+##
+## ## Named PreparedStatement Parameter:
+##
+##    :dateFrom - starting time
+##    :dateTo - ending time
+##  
+##=============================================================================
+
+
+#set($tpUnit = 1048576)
+#DEFINE_CONSTANTS()
+#foreach($techPack in $techPackTables.getTechPacks())
+	#set($dtTables=$techPack.getDtTables())
+#end
+
+#set($dtSelectColumns = [])
+#foreach ($column in $columnsForDtQuery)
+	#if ( $velocityCount <= 1)
+			#set($isAdded = $dtSelectColumns.add($column))
+			#set($isAdded = $dtSelectColumns.add("DATAVOL_DL"))
+			#set($isAdded = $dtSelectColumns.add("DATAVOL_UL"))
+			#else
+			#set($isAdded = $dtSelectColumns.add($column))
+	#end
+#end
+#SET_GROUP_TYPE($type)
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+
+select
+    #if($count > 0)
+	  top $count
+	#end
+	rank() over (order by TOTAL_DATAVOL desc) as RANK,
+	#if(${type}==$TYPE_IMSI&&$useAggregationTables)
+		temp_dt.GROUP_NAME,
+	#else
+    groupref.GROUP_NAME,
+	#end
+	convert(numeric(16,3), SUM(convert(numeric(16,2), temp_dt.DATAVOL_DL)/$tpUnit)) as TOTAL_DATAVOL_DL,
+	convert(numeric(16,3), SUM(convert(numeric(16,2), temp_dt.DATAVOL_UL)/$tpUnit)) as TOTAL_DATAVOL_UL,
+	TOTAL_DATAVOL_DL+TOTAL_DATAVOL_UL as TOTAL_DATAVOL
+from
+	#if($useAggregationTables)
+		$dtTables temp_dt
+	#else
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_WITH_TAC_EXCLUSION_SPECIFY_COLUMNS($dtTables "temp_dt" $dtSelectColumns)
+	#end
+	#if(${type}==$TYPE_APN)
+		 inner join
+	(select
+    	APN
+    from
+    	dc.DIM_E_SGEH_APN 
+    where
+	    LAST_SEEN >= :dateFromForApnRetention 
+    group by
+		APN
+    )as validapn(
+    	APN)
+    on(
+		temp_dt.APN = validapn.APN
+    )
+	#end
+	#if(${type}!=$TYPE_IMSI||!$useAggregationTables)
+	,$groupTable groupref
+	#end
+where
+	#if($useAggregationTables)
+		#GET_DATETIME_RANGE_BY_TABLE ("temp_dt")
+		and 
+	#end
+	#if(${type}==$TYPE_IMSI&&$useAggregationTables)
+		#GET_NOT_NULL_COLUMNS_WHERE("temp_dt" ["GROUP_NAME"])
+	#else
+	#GET_NOT_NULL_COLUMNS_WHERE("temp_dt" $columnsForDtQuery)
+	and
+	#end
+	#if(${type}==$TYPE_SGSN)
+		temp_dt.SGSN_NAME = groupref.$SGSN
+	#else
+		#if(${type}!=$TYPE_IMSI||!$useAggregationTables)
+			#GET_JOIN("temp_dt" "groupref" $joinKeys)
+		#end
+	#end
+group by
+	#if(${type}==$TYPE_IMSI&&$useAggregationTables)
+		temp_dt.GROUP_NAME
+	#else
+    groupref.GROUP_NAME
+	#end

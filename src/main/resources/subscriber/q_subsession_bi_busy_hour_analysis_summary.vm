@@ -1,0 +1,100 @@
+##
+## Subsession Business Intelligence - Busy hour summary analysis
+##
+## Description: 
+##
+##     Summary data for busy hour events.
+##
+## Parameter:   IMSI, groupname, DATE_TIME range
+##
+## Author : eavidat
+## Date   : Nov 2010
+
+#DEFINE_CONSTANTS()
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($TYPE_IMSI))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#if(${type}==$TYPE_MSISDN)
+	#set($ismsisdn=true)
+	#set($joinKeys=["IMSI"])
+#end
+
+## resetting $RAW_ERR_TABLES & $SUC_ERR_TABLES to include 4G tables
+#set($RAW_ERR_TABLES = $techPackTables.getErrTables())
+#set($RAW_SUC_TABLES = $techPackTables.getSucTables())
+
+#set($imsiColumn=[$IMSI] )
+#set($periodColumn="HOUR_ID")
+#set($columnsToSelect=[$periodColumn,$IMSI])
+
+select
+	sum(no_of_errors) as NO_OF_FAILURES,
+	sum(no_of_successes) as NO_OF_SUCCESSES,
+	$periodColumn
+from
+(
+	select	
+		$periodColumn,
+		count(*) as no_of_errors,
+		0 as no_of_successes
+	from 
+		
+		#if($isgroup||$ismsisdn)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $columnsToSelect)
+			#if($isgroup)
+			,$groupTable groupref
+			#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			#end	
+			where	
+			#if($isgroup)
+				#GET_JOIN("err" "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+				#GET_JOIN("err" "msisdnMap" $joinKeys)
+				and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_ERR_TABLES "err" $imsiColumn $columnsToSelect)
+		#end
+	group by 
+		$periodColumn	
+	union all
+	select 
+		$periodColumn,
+		0 as no_of_errors,
+		count(*) as no_of_successes
+	from 
+		#if($isgroup||$ismsisdn)
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_FILTER_ON_TIME_AND_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $columnsToSelect)
+			#if($isgroup)
+			,$groupTable groupref
+			#elseif($ismsisdn)
+			 ,dc.DIM_E_IMSI_MSISDN msisdnMap
+			#end
+			where		
+			#if($isgroup)
+				#GET_JOIN("suc" "groupref" $joinKeys)
+				and $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM
+			#elseif($ismsisdn)
+				#GET_JOIN("suc" "msisdnMap" $joinKeys)
+				and msisdnMap.MSISDN = :$ApplicationConstants.MSISDN_PARAM.toUpperCase()
+			#end
+		#else
+			#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_FILTER_COLUMNS_SPECIFY_COLUMNS($RAW_SUC_TABLES "suc" $imsiColumn $columnsToSelect)
+		#end
+	group by 
+		$periodColumn
+)DT_EVENT_E_SGEH_RAW
+group by 
+	DT_EVENT_E_SGEH_RAW.$periodColumn
+order by 
+	DT_EVENT_E_SGEH_RAW.$periodColumn

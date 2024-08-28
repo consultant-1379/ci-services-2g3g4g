@@ -1,0 +1,207 @@
+##=============================================================================
+##
+## Event analysis: detailed events data
+## -----------------------------------
+##
+## List events for subscriber, network etc
+##
+## type : one of {IMSI, SGSN, BSC, CELL, APN, TAC}
+## 
+## useTACExclusion : true if the query should exclude TACs in the EXCLUSIVE_TAC group
+##
+##  if groupname is set then the type that's set is used as the group type
+##         IMSI: search by GROUP_NAME from IMSI GROUP table
+##         APN: search by GROUP_NAME from APN GROUP
+##         TAC: search by GROUP_NAME from TAC group
+##
+##
+## key : one of {SUC, ERR, TOTAL}
+##
+## NOTE: For subscriber session management, All the TACs will be considered. i.e, no blacklist TACs here
+##
+##=============================================================================
+
+#DEFINE_CONSTANTS()
+#SET_GROUP_TYPE($type)
+
+#set($useNonLteTables=true)
+#set($useLteTables=true)
+#set($lteTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_LTE_TPNAME).getRawErrTables())
+#set($sgehTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_SGEH_TPNAME).getRawErrTables())
+
+#if(${type}==$TYPE_IMSI)
+    #set($columns=[$IMSI])
+   
+    #if(!${groupDefinitions})
+       	#set($lteTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_LTE_TPNAME).getRawTables())
+	#set($sgehTableList=$TECH_PACK_LIST.getTechPack($ApplicationConstants.EVENT_E_SGEH_TPNAME).getRawTables())
+    #end
+    
+#elseif(${type}==$TYPE_SGSN)
+    #set($columns=[$SGSN])
+#elseif(${type}==$TYPE_BSC)
+	#set($useLteTables=true)
+    #set($columns=[$RAT,$VENDOR,$BSC])
+#elseif(${type}==$TYPE_CELL)	
+		#set($columns=[$RAT,$VENDOR,$BSC,$CELL])
+	#if(${RAT_VALUE}=="2")
+		#set($useNonLteTables=false)
+	#else
+		#set($useLteTables=true)
+	#end
+#elseif(${type}==$TYPE_APN)
+    #set($columns=[$APN])
+#elseif(${type}==$TYPE_TAC)
+    #set($columns=[$TAC])
+#elseif(${type}==$TYPE_PTMSI)
+	#set($columns=[$PTMSI])
+	##PTMSI is not valid in 4G network - verified by Vasco (systems)
+	#set($useLteTables=false)
+#end
+
+#if(${groupDefinitions})
+#set($groupDef = $groupDefinitions.get($groupType))
+#set($groupTable = $groupDef.getTableName())
+#set($groupnameColumn = $groupDef.getGroupNameColumn())
+#set($joinKeys = $groupDef.getGroupKeys())
+#set($isgroup=true)
+#else
+#set($isgroup=false)
+#end
+
+#set($datavolcolumnsToSelect=["EVENT_TIME","convert(numeric(16,3), convert(numeric(16,2), DATAVOL_UL)/1024)","convert(numeric(16,3), convert(numeric(16,2), DATAVOL_DL)/1024)","(case when (QOS_MEAN_DATAVOL = 0 and DATAVOL_UL > 0) then(100)else convert(numeric(16,3), convert(numeric(16,2), DATAVOL_UL)/convert(numeric(16,4), QOS_MEAN_DATAVOL)*100) end)","(case when (QOS_MEAN_DATAVOL = 0 and DATAVOL_DL > 0) then(100) else convert(numeric(16,3), (convert(numeric(16,2), DATAVOL_DL)/convert(numeric(16,4), QOS_MEAN_DATAVOL))*100) end)","convert(numeric(16,3), (convert(numeric(16,4), PEAK_USAGE_UL/10000)*100))","convert(numeric(16,3), (convert(numeric(16,4), PEAK_USAGE_DL/10000)*100))", "QOS_HOP_UP", "QOS_HOP_DOWN","DURATION","CHARGING_ID"])
+#set($datavolcolumnsToSelectWithIMSI=["rawview.IMSI","EVENT_TIME","convert(numeric(16,3), convert(numeric(16,2), DATAVOL_UL)/1024)","convert(numeric(16,3), convert(numeric(16,2), DATAVOL_DL)/1024)","(case when (QOS_MEAN_DATAVOL = 0 and DATAVOL_UL > 0) then(100)else convert(numeric(16,3), convert(numeric(16,2), DATAVOL_UL)/convert(numeric(16,4), QOS_MEAN_DATAVOL)*100) end)","(case when (QOS_MEAN_DATAVOL = 0 and DATAVOL_DL > 0) then(100) else convert(numeric(16,3), (convert(numeric(16,2), DATAVOL_DL)/convert(numeric(16,4), QOS_MEAN_DATAVOL))*100) end)","convert(numeric(16,3), (convert(numeric(16,4), PEAK_USAGE_UL/10000)*100))","convert(numeric(16,3), (convert(numeric(16,4), PEAK_USAGE_DL/10000)*100))", "QOS_HOP_UP", "QOS_HOP_DOWN","DURATION","CHARGING_ID"])
+#set($deactivateEventID = "4")
+
+#macro(XEVENT_ANALYSIS_WHERE $rawType $networkType)
+where
+	rawview.EVENT_ID = etref.EVENT_ID
+    and rawview.CAUSE_PROT_TYPE = cptref.CAUSE_PROT_TYPE
+    and rawview.CAUSE_PROT_TYPE *= ccref.CAUSE_PROT_TYPE
+    and rawview.CAUSE_CODE = ccref.CAUSE_CODE
+    and rawview.SUBCAUSE_CODE = sccref.SUBCAUSE_CODE
+    and rawview.EVENT_RESULT = erref.EVENT_RESULT
+	and rawview.ATTACH_TYPE *= attachref.ATTACH_TYPE 
+	and rawview.DETACH_TRIGGER *= detrigref.DETACH_TRIGGER
+	and rawview.DETACH_TYPE *= detachref.DETACH_TYPE
+	and rawview.DEACTIVATION_TRIGGER *= deactrigview.DEACTIVATION_TRIGGER
+	and rawview.RAT = ratref.RAT 
+	and rawview.SERVICE_REQ_TRIGGER *= service_req.SERVICE_REQ_TRIGGER 
+	#if (${rawType} == $ApplicationConstants.TYPE_MAN)
+		and rawview.TAC = tacref.TAC
+	#else
+		and rawview.TAC *= tacref.TAC
+	#end
+	#if($QCI_ERR_FILTER)
+		and $QCI_ERR_FILTER <> 0		
+	#end
+	#if ($networkType == $ApplicationConstants.LTE)		
+		and rawview.L_DISCONNECT_PDN_TYPE *= pdnref.PDNDISCONNECTTYPE
+		and rawview.EVENT_ID *= subtyperef.EVENT_ID and rawview.EVENT_SUBTYPE_ID *=subtyperef.EVENT_SUBTYPE_ID
+		and subtyperef.EVENT_ID = 7
+	
+		and rawview.SMS_ONLY            *= sms_only_ref.SMS_ONLY 
+		and rawview.COMBINED_TAU_TYPE   *= combined_tau_type_ref.COMBINED_TAU_TYPE
+    
+		and rawview.ARP_PCI_1           *= arp_pci_ref1.ARP_PCI
+		and rawview.ARP_PCI_2           *= arp_pci_ref2.ARP_PCI
+		and rawview.ARP_PCI_3           *= arp_pci_ref3.ARP_PCI
+
+		and rawview.ARP_PVI_1           *= arp_pvi_ref1.ARP_PVI
+		and rawview.ARP_PVI_2           *= arp_pvi_ref2.ARP_PVI
+		and rawview.ARP_PVI_3           *= arp_pvi_ref3.ARP_PVI
+
+		and rawview.BEARER_CAUSE_1      *= bearer_cause_ref1.BEARER_CAUSE
+		and rawview.BEARER_CAUSE_2      *= bearer_cause_ref2.BEARER_CAUSE
+		and rawview.BEARER_CAUSE_3      *= bearer_cause_ref3.BEARER_CAUSE
+	#else
+		and rawview.OLD_SGSN_IPADDRESS  *= sgsnref.IP_ADDRESS	
+		and rawview.PDP_GGSN_NAME_1 	*= ggsnref.GGSN_IPADDRESS
+		and rawview.PDP_GGSN_NAME_2     *= ggsnref.GGSN_IPADDRESS
+	#end
+#end
+
+
+#macro(TEMP_RAWVIEW_QUERY_FOR_EVENT_ANALYSIS $tablesToUseInQuery)
+	,(
+	#foreach ($rawtable in $tablesToUseInQuery)
+		SELECT raw.*
+		FROM #temp_$rawtable raw
+		#if($velocityCount < $tablesToUseInQuery.size())
+			union all
+		#end
+	#end
+	) as rawview 
+#end
+	
+
+#macro(EVENT_ANALYSIS_QUERY $networkType $tablesToUseInQuery)
+(
+	#EVENT_ANALYSIS_SELECT($isgroup $type $networkType)
+	
+	#EVENT_ANALYSIS_FROM(false $networkType $groupTable)
+	#TEMP_RAWVIEW_QUERY_FOR_EVENT_ANALYSIS($tablesToUseInQuery)
+	
+	#XEVENT_ANALYSIS_WHERE($type $networkType)
+)
+#end
+
+
+
+#macro(CREATE_EVENT_ANALYSIS_TEMP_TABLE $countTop $tablesToUseInQuery)
+	#foreach ($rawtable in $tablesToUseInQuery)
+		SELECT
+		#if($countTop > 0)
+			top $countTop
+		#end	
+		*
+		INTO #temp_$rawtable
+		FROM (
+			SELECT raw.*
+			FROM dc.$rawtable raw
+			,dc.GROUP_TYPE_E_RAT_VEND_HIER3 groupref	
+		WHERE
+			#GET_DATETIME_RANGE()
+			AND #GET_TAC_EXCLUSION()
+			AND EVENT_ID = $eventID
+			AND raw.HIERARCHY_3 = groupref.HIERARCHY_3
+			AND $groupnameColumn = :$ApplicationConstants.GROUP_NAME_PARAM	
+		) AS TEMP
+		ORDER BY TEMP.DATETIME_ID DESC;	
+	#end
+#end
+
+
+#if($sgehTableList.size() > 0 && $useNonLteTables)
+	#CREATE_EVENT_ANALYSIS_TEMP_TABLE($count $sgehTableList)
+#end
+#if($lteTableList.size() > 0 && $useLteTables)
+	#CREATE_EVENT_ANALYSIS_TEMP_TABLE($count $lteTableList)
+#end
+
+select
+
+	#RAW_EVENT_ANALYSIS_COLUMNS($count $isgroup $type),
+	null as PDP_DURATION,
+	null as DATAVOL_DL,
+	null as AVG_USAGE_DL,
+	null as PEAK_USAGE_DL,
+	null as DATAVOL_UL,
+	null as AVG_USAGE_UL,
+	null as PEAK_USAGE_UL,
+	null as QOS_HOP_UP,
+	null as QOS_HOP_DOWN,
+	null as CHARGING_ID
+from (
+#if($sgehTableList.size() > 0 && $useNonLteTables)
+	#EVENT_ANALYSIS_QUERY( $ApplicationConstants.SGEH $sgehTableList)
+#end
+#if($lteTableList.size() > 0 && $useLteTables)
+	#if($sgehTableList.size() > 0 && $useNonLteTables)
+		union all 
+	#end
+	#EVENT_ANALYSIS_QUERY ($ApplicationConstants.LTE $lteTableList)	
+#end
+)
+EVENT_ANALYSIS_RESULT
+order by EVENT_ANALYSIS_RESULT.DATETIME_ID desc

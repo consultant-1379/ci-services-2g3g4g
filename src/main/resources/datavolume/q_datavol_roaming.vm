@@ -1,0 +1,106 @@
+##=============================================================================
+##
+## Network analysis : Data Volume Roaming information
+##  
+## timerange : one of { TR_1, TR_2, TR_3, TR_4}
+##  
+##     TR_1 : query against raw   
+##     TR_2 : query against 1min agg
+##     TR_3 : query against 15min agg
+##     TR_4 : query against daily agg
+##
+## roamingobject : one of {MCC, MCC_MNC} 
+##
+## Description: 
+## 
+##     Get the roaming statistics for each roaming country or roaming operator   
+## 
+##=============================================================================
+#DEFINE_CONSTANTS()
+#set($tpUnit = 1048576)
+#set($time = $ApplicationMethods.returnAggregateViewType(${timerange}))
+#foreach($techPack in $techPackTables.getTechPacks())
+	#set($dtTables=$techPack.getDtTables())
+	#set($dtPdpTables=$techPack.getDtPdpTables())
+#end
+#if($useAggregationTables)
+	#set($ImsiMCC="MCC")
+#else
+	#set($ImsiMCC="IMSI_MCC")
+#end
+#if($useAggregationTables)
+	#set($ImsiMNC="MNC")
+#else
+	#set($ImsiMNC="IMSI_MNC")
+#end
+#set($dtSelectColumns = [$ImsiMCC, $ImsiMNC, "DATAVOL_DL", "DATAVOL_UL", "ROAMING", "DATETIME_ID"])
+#set($dtPdpSelectColumns = [$ImsiMCC, $ImsiMNC, "ROAMING", "DATETIME_ID"])
+
+select    
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+		COUNTRY,
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+		OPERATOR,
+    #end
+	convert(numeric(16,3), SUM(convert(numeric(16,2), DATAVOL_DL)/$tpUnit)),
+    convert(numeric(16,3), SUM(convert(numeric(16,2), DATAVOL_UL)/$tpUnit)),
+    max(NO_OF_BEARER_COUNT)
+	
+from
+	#if($useAggregationTables)
+		$dtTables dttable
+	#else
+		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($dtTables "dttable" $dtSelectColumns)
+	#end
+
+inner join
+	DIM_E_SGEH_MCCMNC
+	on (DIM_E_SGEH_MCCMNC.MCC = dttable.$ImsiMCC AND DIM_E_SGEH_MCCMNC.MNC = dttable.$ImsiMNC)
+
+left outer join
+	(
+		select 
+			#if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+				$ImsiMCC,
+			#elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+				$ImsiMNC,
+			#end
+			#if($useAggregationTables)
+				SUM(NO_OF_TOTAL)
+			#else
+				count(*)
+			#end
+		from
+			#if($useAggregationTables)
+        		$dtPdpTables temppdp
+        	#else
+        		#REPLACE_RAW_VIEW_WITH_RAW_TABLES_AND_SPECIFY_COLUMNS($dtPdpTables "temppdp" $dtPdpSelectColumns)
+        	#end
+		where
+			temppdp.ROAMING = 1
+			AND #GET_DATETIME_RANGE()
+		group by
+			#if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+				$ImsiMCC
+			#elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+				$ImsiMNC
+			#end
+	) as dtpdptable (MCC_OR_MNC,NO_OF_BEARER_COUNT)
+	on (
+		#if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+			DIM_E_SGEH_MCCMNC.MCC = dtpdptable.MCC_OR_MNC
+		#elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+			DIM_E_SGEH_MCCMNC.MNC = dtpdptable.MCC_OR_MNC
+		#end
+	)
+	
+where
+	dttable.ROAMING = 1
+	AND #GET_DATETIME_RANGE()
+
+group by
+    #if(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_COUNTRY)
+		COUNTRY
+    #elseif(${roamingobject} == $ApplicationConstants.TYPE_ROAMING_OPERATOR)
+		OPERATOR
+    #end
